@@ -9,6 +9,7 @@
 *.dylib
 bin/
 dist/
+newsroom
 
 # Test binary, built with `go test -c`
 *.test
@@ -32,8 +33,10 @@ go.work.sum
 !.env.example
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+.qwen/
+.pi/
 
 # macOS
 .DS_Store
@@ -48,3 +51,4 @@ profiles/private/
 
 # Generated output
 output/
+logs/
