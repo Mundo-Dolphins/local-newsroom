@@ -20,7 +20,7 @@ coverage.*
 profile.cov
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
 
 # Go workspace file
 go.work
@@ -32,8 +32,10 @@ go.work.sum
 !.env.example
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+.qwen/
+.pi/
 
 # macOS
 .DS_Store
@@ -48,3 +50,4 @@ profiles/private/
 
 # Generated output
 output/
+logs/
