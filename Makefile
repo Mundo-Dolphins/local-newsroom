@@ -18,7 +18,11 @@ TOOLCHAIN ?= ~/go/bin
 GO := go
 
 # Pinned tool versions (control upgrades via Makefile, not CI)
+
+# renovate: datasource=github-releases depName=golangci/golangci-lint versioning=loose
 GOLANGCI_LINT_VERSION = v2.14.0
+
+# renovate: datasource=github-releases depName=securego/gosec versioning=semver
 GOSSEC_VERSION = v2.27.0
 
 GOLANGCI_LINT = $(TOOLCHAIN)/golangci-lint

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/datasource-schema.json",
+  extends: [
+    "config:recommended",
+    ":disableDependencyDashboard",
+    ":pinVersions"
+  ],
+  labels: ["dependencies", "toolchain"],
+  commitMessagePrefix: "toolchain:",
+  // Prevent Renovate from managing ecosystems handled by Dependabot
+  ignorePaths: [
+    "go.mod",
+    "go.sum",
+    ".github/workflows/"
+  ],
+  // Group Go version changes to keep go.mod and ci.yml in sync
+  group: [
+    {
+      "name": "Go version synchronization",
+      "managers": ["custom-golang-version"]
+    }
+  ],
+  // Disable auto-merge as per requirements
+  prCreation: "not-pending",
+  vulnerabilityAlerts: {
+    "enabled": false
+  },
+  // Custom datasource definition for golang-version in ci.yml
+  customDatasources: {
+    "custom-golang-version": {
+      "type": "golang-version",
+      "defaultRegistryUrlTemplate": "https://proxy.golang.org",
+      "versioningTemplate": "semver"
+    }
+  },
+  // Custom manager for Makefile tool versions
+  customManagers: [
+    {
+      "customType": "regex",
+      "fileMatch": ["Makefile"],
+      "matchStrings": [
+        "^# renovate:\\s*(?<datasource>github-releases).*depName=(?<depName>.+?)\\s+versioning=(?<versioning>.+?)\\s*\\nGOLANGCI_LINT_VERSION\\s*=\\s*(?<currentValue>\\S+)",
+        "^# renovate:\\s*(?<datasource>github-releases).*depName=(?<depName>.+?)\\s+versioning=(?<versioning>.+?)\\s*\\nGOSSEC_VERSION\\s*=\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "{{{depName}}}",
+      "datasourceTemplate": "{{{datasource}}}",
+      "versioningTemplate": "{{{versioning}}}"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [".github/workflows/ci\\.yml$"],
+      "matchStrings": [
+        "^# renovate:\\s*(?<datasource>golang-version).*depName=golang\\s*\\n\\s*GO_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ]
+    }
+  ],
+  // Schedule - weekly on Sunday at 02:00
+  schedule: ["sunday at 02:00"]
+}
