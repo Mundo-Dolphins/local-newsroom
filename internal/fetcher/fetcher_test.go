@@ -19,7 +19,7 @@ func TestNewClient(t *testing.T) {
 		check  func(*testing.T, *Client)
 	}{
 		{
-			name: "default config creates client with reasonable defaults",
+			name:   "default config creates client with reasonable defaults",
 			config: Config{},
 			check: func(t *testing.T, c *Client) {
 				if c.userAgent == "" {
@@ -71,7 +71,7 @@ func TestFetch_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("<html><body>Hello World</body></html>"))
+		_, _ = w.Write([]byte("<html><body>Hello World</body></html>"))
 	}))
 	defer server.Close()
 
@@ -104,7 +104,7 @@ func TestFetch_ContentTypeDetection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"key": "value"}`))
+		_, _ = w.Write([]byte(`{"key": "value"}`))
 	}))
 	defer server.Close()
 
@@ -132,7 +132,7 @@ func TestFetch_RedirectHandling(t *testing.T) {
 			http.Redirect(w, r, "/final", http.StatusFound)
 		case "/final":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Redirected content"))
+			_, _ = w.Write([]byte("Redirected content"))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -174,7 +174,7 @@ func TestFetch_RedirectDisabled(t *testing.T) {
 func TestFetch_Non2xxStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Not Found"))
+		_, _ = w.Write([]byte("Not Found"))
 	}))
 	defer server.Close()
 
@@ -237,7 +237,7 @@ func TestFetch_OversizedResponse(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(largeContent)))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(largeContent))
+		_, _ = w.Write([]byte(largeContent))
 	}))
 	defer server.Close()
 
@@ -266,7 +266,7 @@ func TestFetch_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second) // Delay longer than context timeout
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("delayed response"))
+		_, _ = w.Write([]byte("delayed response"))
 	}))
 	defer server.Close()
 
@@ -294,7 +294,7 @@ func TestFetch_ContextCancellation(t *testing.T) {
 func TestFetch_ContextCancelledBeforeRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("response"))
+		_, _ = w.Write([]byte("response"))
 	}))
 	defer server.Close()
 
@@ -353,7 +353,7 @@ func TestFetch_MultipleRedirects(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("final"))
+		_, _ = w.Write([]byte("final"))
 	})
 
 	server := httptest.NewServer(handler)
@@ -376,7 +376,7 @@ func TestFetch_HTTPHeadersPreserved(t *testing.T) {
 		w.Header().Set("X-Custom-Header", "custom-value")
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("content"))
+		_, _ = w.Write([]byte("content"))
 	}))
 	defer server.Close()
 
@@ -398,7 +398,7 @@ func TestFetch_ContentLength(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 		w.WriteHeader(http.StatusOK)
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer server.Close()
 
@@ -419,7 +419,7 @@ func TestFetch_UserAgentSent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedUserAgent = r.Header.Get("User-Agent")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("content"))
+		_, _ = w.Write([]byte("content"))
 	}))
 	defer server.Close()
 
@@ -441,7 +441,7 @@ func TestFetchMany(t *testing.T) {
 	// Create a simple server that always returns success
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("content"))
+		_, _ = w.Write([]byte("content"))
 	}))
 	defer server.Close()
 
@@ -475,7 +475,7 @@ func TestFetchMany_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("content"))
+		_, _ = w.Write([]byte("content"))
 	}))
 	defer server.Close()
 
@@ -516,7 +516,7 @@ func TestFetch_BodyContentMatches(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write(expectedContent)
+		_, _ = w.Write(expectedContent)
 	}))
 	defer server.Close()
 
@@ -599,7 +599,7 @@ func TestFetch_ResponseBodyClosed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Return a successful response
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
@@ -623,7 +623,7 @@ func TestFetch_SizeLimitingAccurate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(content))
+		_, _ = w.Write([]byte(content))
 	}))
 	defer server.Close()
 
@@ -646,7 +646,7 @@ func TestFetch_ExactSizeLimit(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(content))
+		_, _ = w.Write([]byte(content))
 	}))
 	defer server.Close()
 
@@ -681,7 +681,7 @@ func TestFetch_301Redirect(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("redirected content"))
+		_, _ = w.Write([]byte("redirected content"))
 	}))
 	defer redirectServer.Close()
 
@@ -705,7 +705,7 @@ func TestFetch_302Redirect(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("redirected content"))
+		_, _ = w.Write([]byte("redirected content"))
 	}))
 	defer redirectServer.Close()
 
@@ -729,7 +729,7 @@ func TestFetch_307Redirect(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("redirected content"))
+		_, _ = w.Write([]byte("redirected content"))
 	}))
 	defer redirectServer.Close()
 
@@ -757,7 +757,7 @@ func TestFetch_ChainedRedirects(t *testing.T) {
 			http.Redirect(w, r, "/final", http.StatusFound)
 		case "/final":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("final"))
+			_, _ = w.Write([]byte("final"))
 		default:
 			http.Redirect(w, r, "/redirect1", http.StatusFound)
 		}
@@ -780,7 +780,7 @@ func TestFetch_ChainedRedirects(t *testing.T) {
 func TestFetch_HttpScheme(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("http response"))
+		_, _ = w.Write([]byte("http response"))
 	}))
 	defer server.Close()
 
@@ -800,7 +800,7 @@ func TestFetch_HttpScheme(t *testing.T) {
 func TestFetch_HttpsScheme(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("https response"))
+		_, _ = w.Write([]byte("https response"))
 	}))
 	defer server.Close()
 

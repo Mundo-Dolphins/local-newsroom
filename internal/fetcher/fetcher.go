@@ -202,7 +202,12 @@ func (c *Client) Fetch(ctx context.Context, baseURL string) (*FetchResult, *Fetc
 			OriginalURL: baseURL,
 		}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			// Note: we don't return this error as we already have the response
+			_ = cerr
+		}
+	}()
 
 	// Check status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
