@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+env:
+  # Use Go 1.27.1 (pinned in go.mod) - aligned with module definition
+  GO_VERSION: "1.27.1"
+  # Default toolchain directory
+  TOOLCHAIN: ~/go/bin
+
+jobs:
+  build-and-quality:
+    runs-on: ubuntu-latest
+    env:
+      GOOS: linux
+      GOARCH: amd64
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Cache Go modules to speed up subsequent runs
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin
+          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
+
+      # Set up Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Install tools via Makefile (keeps CI aligned with local dev)
+      - name: Install tools
+        run: make tools
+
+      # Run all quality gates (reuses Makefile targets for consistency with local dev)
+      - name: Run all quality gates
+        run: make check

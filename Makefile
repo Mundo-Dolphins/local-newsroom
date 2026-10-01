@@ -30,9 +30,13 @@ TOOLCHAIN ?= ~/go/bin
 
 GO := go
 
+# Pinned tool versions (control upgrades via Makefile, not CI)
+GOLANGCI_LINT_VERSION = v2.1.2
+GOSSEC_VERSION = v2.27.0
+
 GOLANGCI_LINT = $(TOOLCHAIN)/golangci-lint
 GOSSEC = $(TOOLCHAIN)/gosec
-GOSSEC_PKG = github.com/securego/gosec/cmd/gosec
+GOSSEC_PKG = github.com/securego/gosec/v2/cmd/gosec
 
 DIST_DIR = $(CURDIR)/dist
 COVERAGE_OUT = $(CURDIR)/coverage.out
@@ -48,11 +52,11 @@ tools: $(GOLANGCI_LINT) $(GOSSEC)
 
 $(GOLANGCI_LINT):
 	@echo "+ $(GOLANGCI_LINT)"; \
-	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 $(GOSSEC):
 	@echo "+ $(GOSSEC)"; \
-	$(GO) install $(GOSSEC_PKG)@latest
+	$(GO) install $(GOSSEC_PKG)@$(GOSSEC_VERSION)
 
 # ---- Formatting and vet -------------------------------------------------------
 

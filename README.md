@@ -28,14 +28,32 @@ Individual gates can be run on their own, e.g. `make test`, `make fmt`,
 ## Tools
 
 `golangci-lint` and `gosec` are installed into `$(TOOLCHAIN)` (default
-`~/go/bin`) by:
+`~/go/bin`) with pinned versions controlled in the Makefile:
 
 ```bash
 make tools
 ```
 
+- **golangci-lint**: v2.1.2
+- **gosec**: v2.27.0
+
+To update tools, change the `GOLANGCI_LINT_VERSION` and `GOSSEC_VERSION`
+variables in the Makefile and run `make tools`.
+
 Dependency installation is never performed silently by the validation targets,
 so `make check` will not fetch anything for you: run `make tools` first.
+
+## Continuous Integration
+
+This project uses GitHub Actions for automated quality gates. The workflow runs
+on pull requests and pushes to `main`:
+
+- **Branches**: `main`
+- **Triggers**: pull requests and pushes
+- **Coverage floor**: 80% (enforced by CI)
+
+The CI workflow reuses the `Makefile` quality targets to ensure local and remote
+checks stay aligned. See `.github/workflows/ci.yml` for the full workflow.
 
 ## Requirements
 
