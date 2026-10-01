@@ -67,6 +67,10 @@ type FetchResult struct {
 
 	// Headers contains relevant response headers.
 	Headers http.Header
+
+	// RetrievedAt is the UTC timestamp when this result was obtained.
+	// Used for provenance tracking in the document pipeline.
+	RetrievedAt time.Time
 }
 
 // FetchError represents a fetch operation failure.
@@ -243,6 +247,9 @@ func (c *Client) Fetch(ctx context.Context, baseURL string) (*FetchResult, *Fetc
 	// Get content type
 	contentType := resp.Header.Get("Content-Type")
 
+	// Set the retrieved timestamp
+	retrievedAt := time.Now().UTC()
+
 	return &FetchResult{
 		FinalURL:      finalURL,
 		ContentType:   contentType,
@@ -250,6 +257,7 @@ func (c *Client) Fetch(ctx context.Context, baseURL string) (*FetchResult, *Fetc
 		Body:          body,
 		HTTPStatus:    resp.StatusCode,
 		Headers:       resp.Header,
+		RetrievedAt:   retrievedAt,
 	}, nil
 }
 
