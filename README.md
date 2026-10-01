@@ -3,6 +3,41 @@
 Local-first AI newsroom for researching, verifying and writing content with
 local LLMs.
 
+## Research Command
+
+The `newsroom research` command fetches URLs, extracts content, and generates
+a validated research dossier:
+
+```bash
+newsroom research \
+  --topic "Miami Dolphins defensive changes" \
+  --url https://example.com/article-1 \
+  --url https://example.com/article-2 \
+  --output dossier.json
+```
+
+### Flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--topic`, `-t` | Yes | Research topic |
+| `--url`, `-u` | Yes | URL to fetch (can be specified multiple times) |
+| `--output`, `-o` | No | Output path for dossier JSON (default: `dossier.json`) |
+| `--llm-base-url` | No | LLM API base URL (default: `OMLX_BASE_URL` env var) |
+| `--llm-model` | No | LLM model name (default: `OMLX_MODEL` env var) |
+| `--llm-timeout` | No | LLM request timeout in seconds (default: 120) |
+| `--fetch-timeout` | No | HTTP fetch timeout in seconds (default: 30) |
+| `--max-size` | No | Maximum response size in bytes (default: 10MB) |
+| `--max-words` | No | Maximum words per document (default: 50000) |
+| `--prompt-file` | No | Path to custom prompt file |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `OMLX_BASE_URL` | LLM API base URL (e.g., `http://localhost:8000/v1`) |
+| `OMLX_MODEL` | LLM model name (e.g., `llama3.1:8b`) |
+
 ## Development commands
 
 The project's common development and quality-gate commands live in the root
