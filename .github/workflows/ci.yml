@@ -23,7 +23,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Extract tool versions from Makefile and export as env vars
       - name: Extract tool versions from Makefile
