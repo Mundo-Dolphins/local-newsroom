@@ -125,10 +125,7 @@ func (d *ResearchDossier) Validate() error {
 			errs = append(errs, fmt.Errorf("claim %q has no evidence and is not marked as unsupported", c.ID))
 		}
 
-		// If unsupported is true but evidence exists, that's unusual but not invalid
-		if c.IsUnsupported && len(c.Evidence) > 0 {
-			// This is allowed - a claim can be marked unsupported but still have weak/contradictory evidence
-		}
+		// If unsupported is true but evidence exists, that's allowed (weak/conflicting evidence case)
 
 		// Validate evidence source references
 		for _, e := range c.Evidence {

@@ -335,14 +335,14 @@ func TestResearchDossierMarshalUnmarshal(t *testing.T) {
 		GeneratedAt: now,
 		Sources: []SourceReference{
 			{
-				StableID:      "source-test-001",
-				OriginalURL:   "https://example.com/test",
-				SourceType:    "web",
-				RetrievedAt:   now,
-				Title:         "Test Title",
-				Author:        "Test Author",
-				PublishedAt:   &now,
-				Metadata:      map[string]string{"key": "value"},
+				StableID:    "source-test-001",
+				OriginalURL: "https://example.com/test",
+				SourceType:  "web",
+				RetrievedAt: now,
+				Title:       "Test Title",
+				Author:      "Test Author",
+				PublishedAt: &now,
+				Metadata:    map[string]string{"key": "value"},
 			},
 		},
 		Claims: []Claim{
@@ -353,8 +353,8 @@ func TestResearchDossierMarshalUnmarshal(t *testing.T) {
 				IsUnsupported: false,
 				Evidence: []Evidence{
 					{
-						SourceID:       "source-test-001",
-						ClaimContext:   "This excerpt supports the claim.",
+						SourceID:     "source-test-001",
+						ClaimContext: "This excerpt supports the claim.",
 						Excerpts: []Excerpt{
 							{
 								Text:          "Excerpt text.",
@@ -381,11 +381,11 @@ func TestResearchDossierMarshalUnmarshal(t *testing.T) {
 		},
 		UnresolvedQuestions: []UnresolvedQuestion{
 			{
-				ID:                "question-test-001",
-				Question:          "Test unresolved question?",
-				WhyUnresolved:     "No definitive answer found.",
-				Priority:          SeverityHigh,
-				RelatedClaimIDs:   []string{"claim-test-001"},
+				ID:              "question-test-001",
+				Question:        "Test unresolved question?",
+				WhyUnresolved:   "No definitive answer found.",
+				Priority:        SeverityHigh,
+				RelatedClaimIDs: []string{"claim-test-001"},
 			},
 		},
 		ResearchNotes: []ResearchNote{
