@@ -105,7 +105,29 @@ func RateLimited(msg string) Error {
 	return Error{Code: "RateLimited", Message: msg}
 }
 
+// IsRateLimited checks if an error is a rate limit error.
+func IsRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	if e, ok := err.(Error); ok {
+		return e.Code == "RateLimited"
+	}
+	return false
+}
+
 // Internal returns an error indicating an internal provider error.
 func Internal(msg string) Error {
 	return Error{Code: "Internal", Message: msg}
+}
+
+// IsInternal checks if an error is an internal provider error.
+func IsInternal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if e, ok := err.(Error); ok {
+		return e.Code == "Internal"
+	}
+	return false
 }
