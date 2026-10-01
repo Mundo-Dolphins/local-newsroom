@@ -2,10 +2,8 @@ name: Renovate
 
 on:
   schedule:
-    # Run weekly on Sunday at 02:00 (same time as Dependabot for consistency)
     - cron: "0 2 * * 0"
   workflow_dispatch:
-    # Allow manual trigger
     inputs:
       baseBranch:
         description: "Base branch to update"
@@ -16,10 +14,6 @@ on:
           - main
 
 env:
-  # The renovate GitHub Action will use the required authentication
-  # A GITHUB_TOKEN is automatically available in the workflow context
-  # with sufficient permissions. If GITHUB_TOKEN permissions are insufficient,
-  # a repository secret RENOVA _TOKEN with a Personal Access Token (PAT) is required.
   RENOVATE_TOKEN: "${{ secrets.RENOVATE_TOKEN || github.token }}"
 
 jobs:
@@ -33,23 +27,10 @@ jobs:
           fetch-depth: 0
 
       - name: Run Renovate
-        # Use the latest stable version of Renovate Action
         uses: renovatebot/github-action@v45
         with:
           configuration: .github/renovate.json5
-          # Pin version to prevent drift - renovate.json5 manages this
-          baseBranches:
-            - main
-          # Prune branches to clean up old PRs
+          baseBranches: main
           pruneBranches: true
-          # Rebase confict branches
           rebaseConflictedBranches: true
-          # Keep PRs open when their dependencies are updated
           reuseExistingBranches: true
-          # Log level for debugging
-          dryRun: null
-          # The default GITHUB_TOKEN permissions are usually sufficient:
-          # - Pull and push (to create/merge PRs)
-          # - Repository contents (read/write)
-          # - Actions (read/write)
-          # If needed, set up RENOVA _TOKEN secret with minimal permissions
