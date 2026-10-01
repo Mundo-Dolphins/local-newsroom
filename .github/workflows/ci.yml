@@ -25,16 +25,51 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Cache Go modules to speed up subsequent runs
-      - name: Cache Go modules
+      # Extract tool versions from Makefile and export as env vars
+      - name: Extract tool versions from Makefile
+        id: tools-versions
+        run: |
+          # Extract GOLANGCI_LINT_VERSION from Makefile
+          GOLANGCI_LINT_VERSION=$(grep "^GOLANGCI_LINT_VERSION\s*=" Makefile | sed 's/.*=//' | tr -d ' \t')
+          
+          # Extract GOSSEC_VERSION from Makefile
+          GOSSEC_VERSION=$(grep "^GOSSEC_VERSION\s*=" Makefile | sed 's/.*=//' | tr -d ' \t')
+          
+          echo "Using golangci-lint version: $GOLANGCI_LINT_VERSION"
+          echo "Using gosec version: $GOSSEC_VERSION"
+          
+          # Export for later use
+          echo "GOLANGCI_LINT_VERSION=$GOLANGCI_LINT_VERSION" >> $GITHUB_OUTPUT
+          echo "GOSSEC_VERSION=$GOSSEC_VERSION" >> $GITHUB_OUTPUT
+          export GOLANGCI_LINT_VERSION
+          export GOSSEC_VERSION
+
+      # Restore tools from cache (golangci-lint and gosec)
+      - name: Restore tools
+        id: restore-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin/golangci-lint
+            ~/go/bin/gosec
+          # Cache key based on tool versions from Makefile
+          # This ensures cache persists even when dependencies change
+          key: ${{ runner.os }}-tools-${{ env.GO_VERSION }}-${{ steps.tools-versions.outputs.GOLANGCI_LINT_VERSION }}-${{ steps.tools-versions.outputs.GOSSEC_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-tools-${{ env.GO_VERSION }}-
+
+      # Restore Go build cache (fine to use go.sum hash)
+      - name: Restore Go build cache
+        id: restore-build-cache
         uses: actions/cache@v4
         with:
           path: |
             ~/go/pkg/mod
-            ~/go/bin
-          key: ${{ runner.os }}-go-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+            ~/.cache/go-build
+            ~/go/pkg/mod/cache
+          key: ${{ runner.os }}-go-build-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ env.GO_VERSION }}-
+            ${{ runner.os }}-go-build-${{ env.GO_VERSION }}-
 
       # Set up Go
       - name: Set up Go
@@ -42,10 +77,21 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # Install tools via Makefile (keeps CI aligned with local dev)
+      # Install tools only if not cached
       - name: Install tools
+        if: steps.restore-tools.outputs.cache-hit != 'true'
         run: make tools
+        continue-on-error: true
 
       # Run all quality gates (reuses Makefile targets for consistency with local dev)
       - name: Run all quality gates
         run: make check
+
+      # Upload coverage artifacts
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.out
+          if-no-files-found: ignore
