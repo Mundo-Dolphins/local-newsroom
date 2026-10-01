@@ -48,7 +48,7 @@ jobs:
       # Restore tools from cache (golangci-lint and gosec)
       - name: Restore tools
         id: restore-tools
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/go/bin/golangci-lint
@@ -62,7 +62,7 @@ jobs:
       # Restore Go build cache
       - name: Restore Go build cache
         id: restore-build-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/go/pkg/mod
