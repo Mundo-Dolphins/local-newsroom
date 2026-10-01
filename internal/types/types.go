@@ -163,11 +163,11 @@ type FetchStatusJSON struct {
 // DocumentJSON is a helper type for JSON marshaling that preserves the
 // ability to distinguish between missing fields and explicitly null fields.
 type DocumentJSON struct {
-	CanonicalURL       *string            `json:"canonical_url,omitempty"`
-	Title              *string            `json:"title,omitempty"`
-	PlainText          string             `json:"plain_text"`
-	Author             *string            `json:"author,omitempty"`
-	PublishedAt        *time.Time         `json:"published_at,omitempty"`
-	RetrievedAt        time.Time          `json:"retrieved_at"`
-	ExtractionMetadata map[string]string  `json:"extraction_metadata,omitempty"`
+	CanonicalURL       *string           `json:"canonical_url,omitempty"`
+	Title              *string           `json:"title,omitempty"`
+	PlainText          string            `json:"plain_text"`
+	Author             *string           `json:"author,omitempty"`
+	PublishedAt        *time.Time        `json:"published_at,omitempty"`
+	RetrievedAt        time.Time         `json:"retrieved_at"`
+	ExtractionMetadata map[string]string `json:"extraction_metadata,omitempty"`
 }

@@ -535,8 +535,8 @@ func TestFetchStatusSerialization(t *testing.T) {
 		// Some fields present, others null
 		status := 200
 		fs := FetchStatus{
-			HTTPStatus: &status,
-			ContentType: nil,
+			HTTPStatus:    &status,
+			ContentType:   nil,
 			ContentLength: nil,
 		}
 

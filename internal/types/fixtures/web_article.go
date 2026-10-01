@@ -86,7 +86,7 @@ Open-source alternatives are being explored, though the team warns that simplifi
 "The path to reliable, beneficial AGI requires both technical innovation and thoughtful governance," Dr. Wei concluded. "We're committed to transparency and safety at every stage."
 
 -- End of Article --`,
-		Author: ptr("Sarah Chen"),
+		Author:      ptr("Sarah Chen"),
 		PublishedAt: ptr(time.Date(2024, 1, 14, 16, 45, 0, 0, time.UTC)),
 		RetrievedAt: time.Date(2024, 1, 15, 10, 35, 0, 0, time.UTC),
 		ExtractionMetadata: map[string]string{
