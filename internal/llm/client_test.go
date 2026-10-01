@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,14 +51,14 @@ func TestComplete_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	client := NewClient(Config{
-		BaseURL:   server.URL,
-		Model:     "test-model",
-		Timeout:   10 * time.Second,
+		BaseURL:     server.URL,
+		Model:       "test-model",
+		Timeout:     10 * time.Second,
 		Temperature: 0.7,
 	})
 
@@ -90,13 +91,13 @@ func TestComplete_WithAPIKey(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	client := NewClient(Config{
-		BaseURL:   server.URL,
-		APIKey:    "test-api-key-123",
+		BaseURL:     server.URL,
+		APIKey:      "test-api-key-123",
 		Temperature: 0.5,
 	})
 
@@ -130,12 +131,12 @@ func TestComplete_WithoutAPIKey(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	client := NewClient(Config{
-		BaseURL:   server.URL,
+		BaseURL:     server.URL,
 		Temperature: 0.0,
 	})
 
@@ -154,7 +155,7 @@ func TestComplete_HTTP404(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": map[string]string{
 				"message": "endpoint not found",
 				"type":    "not_found_error",
@@ -192,7 +193,7 @@ func TestComplete_HTTP429(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": map[string]string{
 				"message": "rate limit exceeded",
 				"type":    "rate_limit_error",
@@ -229,7 +230,7 @@ func TestComplete_HTTP500(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": map[string]string{
 				"message": "internal error",
 				"type":    "internal_error",
@@ -262,7 +263,7 @@ func TestComplete_EmptyChoices(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Empty choices array
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"choices": []interface{}{},
 		})
 	}))
@@ -292,7 +293,7 @@ func TestComplete_EmptyContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"choices": []interface{}{
 				map[string]interface{}{
 					"message": map[string]string{
@@ -329,7 +330,7 @@ func TestComplete_MalformedJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{ invalid json response }"))
+		_, _ = w.Write([]byte("{ invalid json response }"))
 	}))
 	defer server.Close()
 
@@ -369,7 +370,7 @@ func TestComplete_ContextCancellation(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -404,7 +405,7 @@ func TestComplete_TimeoutCancellation(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -428,40 +429,12 @@ func TestComplete_TimeoutCancellation(t *testing.T) {
 	_ = err
 }
 
-// TestComplete_MalformedRequestBody tests handling of connection failure.
-func TestComplete_MalformedRequestBody(t *testing.T) {
-	// Server that closes connection immediately
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Close the connection immediately
-		if closeWriter, ok := w.(http.CloseNotifier); ok {
-			closeWriter.CloseNotify()
-		}
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	client := NewClient(Config{
-		BaseURL: server.URL,
-		Model:   "test-model",
-	})
-
-	// This test verifies that connection issues are properly wrapped
-	_, err := client.Complete(context.Background(), Request{
-		Model: "test-model",
-	})
-
-	// Either success or connection error is acceptable
-	// The important thing is it doesn't panic or corrupt
-	_ = err
-}
-
 // TestComplete_CustomHTTPError tests handling of unknown HTTP status codes.
 func TestComplete_CustomHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGatewayTimeout) // 504
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"error": {"message": "gateway timeout", "type": "timeout_error"}}`))
+		_, _ = w.Write([]byte(`{"error": {"message": "gateway timeout", "type": "timeout_error"}}`))
 	}))
 	defer server.Close()
 
@@ -489,7 +462,9 @@ func TestComplete_TemperatureClamping(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
 		capturedTemp = req.Temperature
 
 		resp := chatCompletionResponse{
@@ -497,7 +472,7 @@ func TestComplete_TemperatureClamping(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -543,7 +518,9 @@ func TestComplete_MaxTokens(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
 		capturedMaxTokens = req.MaxTokens
 
 		resp := chatCompletionResponse{
@@ -551,13 +528,13 @@ func TestComplete_MaxTokens(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	client := NewClient(Config{
-		BaseURL:   server.URL,
-		Model:     "test-model",
+		BaseURL:     server.URL,
+		Model:       "test-model",
 		Temperature: 0.0,
 	})
 
@@ -585,7 +562,9 @@ func TestComplete_ZeroMaxTokens(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
 		capturedMaxTokens = req.MaxTokens
 
 		resp := chatCompletionResponse{
@@ -593,13 +572,13 @@ func TestComplete_ZeroMaxTokens(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	client := NewClient(Config{
-		BaseURL:   server.URL,
-		Model:     "test-model",
+		BaseURL:     server.URL,
+		Model:       "test-model",
 		Temperature: 0.0,
 	})
 
@@ -623,7 +602,9 @@ func TestComplete_MessagesSent(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
 		capturedMessages = req.Messages
 
 		resp := chatCompletionResponse{
@@ -631,7 +612,7 @@ func TestComplete_MessagesSent(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -674,7 +655,9 @@ func TestComplete_MessagesSent(t *testing.T) {
 func TestComplete_OnlyUserPrompt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req chatCompletionRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
 
 		if len(req.Messages) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(req.Messages))
@@ -689,7 +672,7 @@ func TestComplete_OnlyUserPrompt(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -718,15 +701,15 @@ func TestComplete_Timeout(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	// Use a short timeout to verify it's configured
 	client := NewClient(Config{
-		BaseURL:   server.URL,
-		Model:     "test-model",
-		Timeout:   5 * time.Second, // Verify custom timeout is set
+		BaseURL:     server.URL,
+		Model:       "test-model",
+		Timeout:     5 * time.Second, // Verify custom timeout is set
 		Temperature: 0.0,
 	})
 
@@ -775,7 +758,7 @@ func TestComplete_ResponseWithFinishReason(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -801,11 +784,11 @@ func TestComplete_ResponseWithFinishReason(t *testing.T) {
 // TestComplete_HealthCheck tests that client can be instantiated without errors.
 func TestComplete_HealthCheck(t *testing.T) {
 	client := NewClient(Config{
-		BaseURL:     "http://localhost:8000/v1",
-		Model:       "test-model",
-		Timeout:     10 * time.Second,
-		APIKey:      "test-key",
-		Temperature: 0.5,
+		BaseURL:         "http://localhost:8000/v1",
+		Model:           "test-model",
+		Timeout:         10 * time.Second,
+		APIKey:          "test-key",
+		Temperature:     0.5,
 		MaxOutputTokens: 100,
 	})
 
@@ -820,17 +803,140 @@ func TestComplete_HealthCheck(t *testing.T) {
 
 // Helper function to check if a string contains a substring.
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && 
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		 findSubstring(s, substr)))
-}
-
-// findSubstring finds if substr exists in s (simple implementation).
-func findSubstring(s, substr string) bool {
+	if len(s) < len(substr) {
+		return false
+	}
+	if s == substr {
+		return true
+	}
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true
 		}
 	}
 	return false
+}
+
+// TestComplete_IgnoreReadError tests that read errors are handled gracefully.
+func TestComplete_IgnoreReadError(t *testing.T) {
+	// Create a response body that will cause an error on read
+	// We use a limited reader to simulate partial read
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Write incomplete JSON to cause parse error
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		n, _ := io.WriteString(w, `{"choices": [`)
+		// Close the connection without completing the JSON
+		hj, ok := w.(http.Hijacker)
+		if ok {
+			conn, _, _ := hj.Hijack()
+			_ = conn.Close()
+			_ = n
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		BaseURL:     server.URL,
+		Model:       "test-model",
+		Temperature: 0.0,
+	})
+
+	_, err := client.Complete(context.Background(), Request{
+		Model: "test-model",
+	})
+
+	// Should get an error for incomplete JSON or connection
+	if err == nil {
+		t.Fatal("expected error for incomplete response, got nil")
+	}
+}
+
+// TestComplete_ErrorPropagation tests that HTTP errors are properly typed.
+func TestComplete_ErrorPropagation(t *testing.T) {
+	tests := []struct {
+		name           string
+		statusCode     int
+		expectedType   func(error) bool
+		responseBody   string
+		messagePattern string
+	}{
+		{
+			name:           "404 not found",
+			statusCode:     http.StatusNotFound,
+			expectedType:   IsInternal,
+			responseBody:   `{"error": {"message": "not found", "type": "not_found"}}`,
+			messagePattern: "not found",
+		},
+		{
+			name:           "429 rate limited",
+			statusCode:     http.StatusTooManyRequests,
+			expectedType:   IsRateLimited,
+			responseBody:   `{"error": {"message": "too many requests", "type": "rate_limit"}}`,
+			messagePattern: "too many requests",
+		},
+		{
+			name:           "500 internal error",
+			statusCode:     http.StatusInternalServerError,
+			expectedType:   IsInternal,
+			responseBody:   `{"error": {"message": "internal error", "type": "internal"}}`,
+			messagePattern: "internal error",
+		},
+		{
+			name:           "401 unauthorized",
+			statusCode:     http.StatusUnauthorized,
+			expectedType:   IsInternal,
+			responseBody:   `{"error": {"message": "invalid api key", "type": "auth"}}`,
+			messagePattern: "invalid api key",
+		},
+		{
+			name:           "unknown status with JSON",
+			statusCode:     http.StatusGatewayTimeout,
+			expectedType:   IsInternal,
+			responseBody:   `{"error": {"message": "timeout", "type": "timeout"}}`,
+			messagePattern: "provider error (504)",
+		},
+		{
+			name:           "unknown status without JSON",
+			statusCode:     http.StatusBadGateway,
+			expectedType:   IsInternal,
+			responseBody:   `Bad Gateway`,
+			messagePattern: "HTTP 502",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Header().Set("Content-Type", "application/json")
+				if tt.responseBody != "" {
+					_, _ = w.Write([]byte(tt.responseBody))
+				}
+			}))
+			defer server.Close()
+
+			client := NewClient(Config{
+				BaseURL:     server.URL,
+				Model:       "test-model",
+				Temperature: 0.0,
+			})
+
+			_, err := client.Complete(context.Background(), Request{
+				Model: "test-model",
+			})
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if !tt.expectedType(err) {
+				t.Errorf("expected error of type matched by %T, got %T: %v", tt.expectedType(err), err, err)
+			}
+
+			if !contains(err.Error(), tt.messagePattern) {
+				t.Errorf("expected error to contain %q, got %q", tt.messagePattern, err.Error())
+			}
+		})
+	}
 }

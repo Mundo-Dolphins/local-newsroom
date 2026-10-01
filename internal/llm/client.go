@@ -98,7 +98,9 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req Request) (Respons
 		}
 		return Response{}, Internal("connection failed: " + err.Error())
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Handle non-2xx responses
 	if resp.StatusCode != http.StatusOK {
@@ -230,10 +232,10 @@ func (c *OpenAICompatClient) handleHTTPError(resp *http.Response) error {
 
 // chatCompletionRequest represents the request body for /chat/completions.
 type chatCompletionRequest struct {
-	Model       string  `json:"model"`
+	Model       string    `json:"model"`
 	Messages    []message `json:"messages"`
-	Temperature float64 `json:"temperature,omitempty"`
-	MaxTokens   *int    `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"`
+	MaxTokens   *int      `json:"max_tokens,omitempty"`
 }
 
 // message represents a chat message.
