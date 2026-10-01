@@ -75,7 +75,7 @@ func (e *Extractor) Extract(input extractor.Input) (*types.Document, error) {
 	// Build document
 	now := time.Now().UTC()
 	docResult := &types.Document{
-		SourceID:    input.Source.StableID,
+		SourceID: input.Source.StableID,
 		CanonicalURL: func() *string {
 			if canonicalURL != "" {
 				return types.PointerTo(canonicalURL)
@@ -111,9 +111,9 @@ func (e *Extractor) Extract(input extractor.Input) (*types.Document, error) {
 func (e *Extractor) extractContent(doc *xhtml.Node, sourceURL string) string {
 	// First, try to find the main content element
 	mainNode := e.findMainContent(doc)
-	
+
 	var builder strings.Builder
-	
+
 	if mainNode != nil {
 		// Extract from main element
 		e.extractNodeText(mainNode, &builder)
@@ -126,7 +126,7 @@ func (e *Extractor) extractContent(doc *xhtml.Node, sourceURL string) string {
 	}
 
 	text := strings.TrimSpace(builder.String())
-	
+
 	// Clean up excessive whitespace
 	text = e.normalizeWhitespace(text)
 
@@ -206,14 +206,14 @@ func (e *Extractor) walkBodyExcludingNoise(node *xhtml.Node, builder *strings.Bu
 		if e.shouldSkipElement(node) {
 			return
 		}
-		
+
 		// Extract text from this element's children
 		// extractNodeText recursively handles all descendants
 		e.extractNodeText(node, builder)
-		
+
 		// Note: We don't need to walk children separately here
 		// because extractNodeText already handles recursion
-		
+
 	case xhtml.TextNode:
 		text := strings.TrimSpace(node.Data)
 		if text != "" {
@@ -237,7 +237,7 @@ func (e *Extractor) extractNodeText(node *xhtml.Node, builder *strings.Builder) 
 		if e.shouldSkipElement(child) {
 			continue
 		}
-		
+
 		switch child.Type {
 		case xhtml.TextNode:
 			text := strings.TrimSpace(child.Data)
@@ -275,11 +275,7 @@ func (e *Extractor) shouldSkipElement(node *xhtml.Node) bool {
 
 	// Skip by class patterns
 	classes := e.getAttributeValue(node, "class")
-	if e.isNoiseClass(classes) {
-		return true
-	}
-
-	return false
+	return e.isNoiseClass(classes)
 }
 
 // isNoiseElement returns true if the element is considered noise.
@@ -346,18 +342,6 @@ func (e *Extractor) isNoiseClass(classes string) bool {
 		}
 	}
 	return false
-}
-
-// isBlockElement returns true if the element is a block-level element.
-func (e *Extractor) isBlockElement(node *xhtml.Node) bool {
-	blockElements := map[string]bool{
-		"div": true, "p": true, "h1": true, "h2": true, "h3": true,
-		"h4": true, "h5": true, "h6": true, "section": true, "article": true,
-		"header": true, "footer": true, "nav": true, "main": true, "aside": true,
-		"blockquote": true, "ul": true, "ol": true, "li": true, "table": true,
-		"pre": true, "code": true, "figure": true, "figcaption": true,
-	}
-	return blockElements[node.Data]
 }
 
 // normalizeWhitespace normalizes whitespace in text content.
@@ -555,16 +539,16 @@ func layout(s string) (time.Time, bool) {
 		"January 2, 2006", "Jan 2, 2006", "2 January 2006",
 		"2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05-07:00",
 	}
-	
+
 	s = strings.TrimSpace(s)
-	
+
 	for _, format := range formats {
 		t, err := time.Parse(format, s)
 		if err == nil {
 			return t, true
 		}
 	}
-	
+
 	return time.Time{}, false
 }
 
@@ -789,12 +773,12 @@ func (e *Extractor) extractJSONSchemaDate(script *xhtml.Node) time.Time {
 			builder.WriteString(child.Data)
 		}
 	}
-	
+
 	content := builder.String()
-	
+
 	// Find datePublished, dateModified, or date in the JSON
 	datePatterns := []string{"datePublished", "dateModified", "date", "publishedAt", "published_date"}
-	
+
 	for _, pattern := range datePatterns {
 		patternRe := regexp.MustCompile(`"` + pattern + `"\s*:\s*"([^"]+)"`)
 		matches := patternRe.FindStringSubmatch(content)

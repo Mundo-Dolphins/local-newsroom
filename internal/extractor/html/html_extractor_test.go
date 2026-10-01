@@ -139,9 +139,8 @@ func TestNoisyPage(t *testing.T) {
 	}
 
 	// Validate we extracted the main article content
-	if !strings.Contains(doc.PlainText, "climate report") &&
-		!strings.Contains(doc.PlainText, "climate report") &&
-		!strings.Contains(doc.PlainText, "Dr. Elena Rodriguez") {
+	if !strings.Contains(strings.ToLower(doc.PlainText), "climate report") &&
+		!strings.Contains(strings.ToLower(doc.PlainText), "elena rodriguez") {
 		t.Error("Main article content should be present")
 	}
 
@@ -330,14 +329,14 @@ func TestPurelyNavigationalPage(t *testing.T) {
 		t.Logf("Got expected error: %v", err)
 		return
 	}
-	
+
 	// If content is extracted, it should be minimal
 	// Nav elements are not considered noise as they may contain useful links
 	// This test verifies the extractor handles such pages without crashing
 	if doc == nil {
 		t.Fatal("Document should not be nil")
 	}
-	
+
 	// Text should be short (only navigation links)
 	if len(doc.PlainText) > 100 {
 		t.Logf("Long text extracted: %q", doc.PlainText)

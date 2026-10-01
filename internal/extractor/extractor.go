@@ -130,19 +130,3 @@ func (c *Config) Validate() {
 		c.DateLayouts = []string{}
 	}
 }
-
-// SourceContent is a convenience type alias for combining Source and Content.
-// This is useful when you have a Source from the fetcher and want to extract
-// content from its associated response.
-type SourceContent struct {
-	Source  types.Source
-	Content []byte
-}
-
-// ToInput converts a SourceContent to an Input.
-func (sc SourceContent) ToInput() Input {
-	return Input{
-		Source:  sc.Source,
-		Content: sc.Content,
-	}
-}
