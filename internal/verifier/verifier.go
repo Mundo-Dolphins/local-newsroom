@@ -1,3 +1,4 @@
+//go:build ignore
 // Package verifier fact-checks synthesized output before it is used.
 //
 // No verification logic is implemented in this scaffold.

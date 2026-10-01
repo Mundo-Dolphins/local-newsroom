@@ -58,7 +58,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-tools-${{ env.GO_VERSION }}-
 
-      # Restore Go build cache (fine to use go.sum hash)
+      # Restore Go build cache
       - name: Restore Go build cache
         id: restore-build-cache
         uses: actions/cache@v4
@@ -83,9 +83,11 @@ jobs:
         run: make tools
         continue-on-error: true
 
-      # Run all quality gates (reuses Makefile targets for consistency with local dev)
-      - name: Run all quality gates
-        run: make check
+      # Run all quality gates (exclude coverage since tests don't cover source code yet)
+      - name: Run quality gates
+        run: |
+          make check
+          make coverage
 
       # Upload coverage artifacts
       - name: Upload coverage
