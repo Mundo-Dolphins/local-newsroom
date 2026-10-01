@@ -1,0 +1,406 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Mundo-Dolphins/local-newsroom/schemas/research-dossier.json",
+  "title": "ResearchDossier",
+  "description": "A research dossier containing findings, claims, evidence, and provenance for the research pipeline. This contract is designed to be factual, traceable to sources, reusable by future Verifier and Writer stages, and independent from Mundo Dolphins writing style.",
+  "type": "object",
+  "required": [
+    "stable_id",
+    "topic",
+    "generated_at",
+    "sources",
+    "claims"
+  ],
+  "properties": {
+    "stable_id": {
+      "type": "string",
+      "description": "Unique identifier for this research dossier. Should be deterministic based on topic and generation parameters."
+    },
+    "topic": {
+      "type": "string",
+      "description": "The topic or subject of the research."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this dossier was generated (UTC)."
+    },
+    "sources": {
+      "type": "array",
+      "description": "All sources consulted during research. These preserve full provenance for traceability.",
+      "items": {
+        "$ref": "#/definitions/SourceReference"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "description": "Factual claims derived from the research. Each claim has a stable ID for reference by other stages.",
+      "items": {
+        "$ref": "#/definitions/Claim"
+      }
+    },
+    "contradictions": {
+      "type": "array",
+      "description": "Documented contradictions or conflicts between sources or claims that require resolution.",
+      "items": {
+        "$ref": "#/definitions/Contradiction"
+      }
+    },
+    "unresolved_questions": {
+      "type": "array",
+      "description": "Questions identified during research that remain unanswered or require further investigation.",
+      "items": {
+        "$ref": "#/definitions/UnresolvedQuestion"
+      }
+    },
+    "research_notes": {
+      "type": "array",
+      "description": "Non-publishable research notes, internal observations, and methodological details that are not part of the final facts.",
+      "items": {
+        "$ref": "#/definitions/ResearchNote"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "SourceReference": {
+      "type": "object",
+      "description": "Reference to a source consulted during research, preserving full provenance.",
+      "required": [
+        "stable_id",
+        "original_url",
+        "source_type",
+        "retrieved_at"
+      ],
+      "properties": {
+        "stable_id": {
+          "type": "string",
+          "description": "Stable ID of the source, matching the fetcher's Source.stable_id."
+        },
+        "original_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Original URL from which the source was retrieved."
+        },
+        "source_type": {
+          "type": "string",
+          "enum": ["web", "rss", "json", "csv", "pdf", "unknown"],
+          "description": "Type of the source."
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this source was fetched (UTC)."
+        },
+        "title": {
+          "type": "string",
+          "description": "Document title, if available."
+        },
+        "author": {
+          "type": "string",
+          "description": "Document author, if identified."
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Document publication timestamp, if available."
+        },
+        "fetch_status": {
+          "type": "object",
+          "description": "HTTP fetch status if available.",
+          "properties": {
+            "http_status": {
+              "type": ["integer", "null"],
+              "description": "HTTP status code, if available."
+            },
+            "content_type": {
+              "type": ["string", "null"],
+              "description": "Content-Type header value, if available."
+            },
+            "content_length": {
+              "type": ["integer", "null"],
+              "description": "Content-Length in bytes, if available."
+            },
+            "fetch_error": {
+              "type": ["string", "null"],
+              "description": "Error message if fetch failed."
+            }
+          },
+          "additionalProperties": false
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional metadata from the source.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Claim": {
+      "type": "object",
+      "description": "A factual claim derived from research. Claims must either have evidence or be explicitly marked as unsupported.",
+      "required": [
+        "id",
+        "statement"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this claim (e.g., claim-001). Must be stable for reference by other stages."
+        },
+        "statement": {
+          "type": "string",
+          "description": "The factual statement being claimed. Should be concise and verifiable."
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "description": "Researcher's confidence level in this claim based on source quality and consistency."
+        },
+        "uncertainty_notes": {
+          "type": "string",
+          "description": "Notes about uncertainty, limitations, or reasons for reduced confidence."
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence supporting this claim. At least one source reference must be provided unless is_unsupported is true.",
+          "items": {
+            "$ref": "#/definitions/Evidence"
+          }
+        },
+        "is_unsupported": {
+          "type": "boolean",
+          "default": false,
+          "description": "True if this claim is intentionally being recorded without supporting evidence. Must be true if evidence array is empty."
+        },
+        "sources_contradicted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of claim IDs that this claim contradicts."
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "is_unsupported": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": ["evidence"]
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "description": "Links a claim to supporting source material.",
+      "required": [
+        "source_id",
+        "excerpts"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "description": "Stable ID of the source providing evidence."
+        },
+        "excerpts": {
+          "type": "array",
+          "description": "Direct excerpts from the source supporting the claim.",
+          "items": {
+            "$ref": "#/definitions/Excerpt"
+          }
+        },
+        "claim_context": {
+          "type": "string",
+          "description": "Optional context explaining how this excerpt supports the claim."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Excerpt": {
+      "type": "object",
+      "description": "A direct excerpt from a source with location information.",
+      "required": [
+        "text",
+        "start_offset",
+        "end_offset"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The exact excerpt text."
+        },
+        "start_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start byte offset of the excerpt in the source's plain_text."
+        },
+        "end_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End byte offset of the excerpt in the source's plain_text."
+        },
+        "context_before": {
+          "type": "string",
+          "description": "Optional context text before the excerpt for disambiguation."
+        },
+        "context_after": {
+          "type": "string",
+          "description": "Optional context text after the excerpt for disambiguation."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Contradiction": {
+      "type": "object",
+      "description": "A documented contradiction or conflict between claims or sources.",
+      "required": [
+        "id",
+        "claim_ids",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this contradiction record."
+        },
+        "claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of claim IDs involved in this contradiction."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the contradiction and why it exists."
+        },
+        "resolution_status": {
+          "type": "string",
+          "enum": ["unresolved", "partial", "resolved"],
+          "default": "unresolved",
+          "description": "Current status of the contradiction resolution."
+        },
+        "resolution_notes": {
+          "type": "string",
+          "description": "Notes about attempted or pending resolution."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "default": "medium",
+          "description": "Severity of the contradiction for prioritization."
+        }
+      },
+      "additionalProperties": false
+    },
+    "UnresolvedQuestion": {
+      "type": "object",
+      "description": "A question identified during research that remains unanswered.",
+      "required": [
+        "id",
+        "question",
+        "why_unresolved"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this question."
+        },
+        "question": {
+          "type": "string",
+          "description": "The question that remains unanswered."
+        },
+        "why_unresolved": {
+          "type": "string",
+          "description": "Explanation of why this question could not be answered with available sources."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "default": "medium",
+          "description": "Priority for future investigation."
+        },
+        "related_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Claim IDs that depend on this question being answered."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResearchNote": {
+      "type": "object",
+      "description": "Non-publishable research notes, internal observations, and methodological details.",
+      "required": [
+        "id",
+        "content"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this note."
+        },
+        "content": {
+          "type": "string",
+          "description": "The note content."
+        },
+        "note_type": {
+          "type": "string",
+          "enum": ["methodology", "observation", "todo", "internal", "warning"],
+          "description": "Type of research note."
+        },
+        "related_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Claim IDs this note relates to."
+        },
+        "related_source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Source IDs this note relates to."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this note was created (UTC)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "description": "Validation rule: Claims without evidence must be explicitly marked as unsupported.",
+      "if": {
+        "type": "array",
+        "path": "$/claims",
+        "items": {
+          "properties": {
+            "evidence": {
+              "minLength": 1
+            },
+            "is_unsupported": {
+              "const": true
+            }
+          },
+          "required": ["evidence", "is_unsupported"]
+        },
+        "pattern": "^(?!.*$)"
+      },
+      "then": {
+        "const": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,305 @@
+{
+  "stable_id": "dossier-ai-regulation-2024-01-15",
+  "topic": "EU AI Act implementation timeline and requirements",
+  "generated_at": "2024-01-15T14:30:00Z",
+  "sources": [
+    {
+      "stable_id": "source-eu-parliament-ai-act-2024",
+      "original_url": "https://www.europarl.europa.eu/topics/article/20240112STO89123/eu-ai-act-adoption-and-implementation",
+      "source_type": "web",
+      "retrieved_at": "2024-01-15T10:00:00Z",
+      "title": "EU AI Act: Adoption and implementation timeline",
+      "author": "European Parliament",
+      "published_at": "2024-01-12T09:00:00Z",
+      "fetch_status": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "content_length": 12450
+      },
+      "metadata": {
+        "server": "nginx",
+        "cache-control": "max-age=3600"
+      }
+    },
+    {
+      "stable_id": "source-techcrunch-ai-act-analysis",
+      "original_url": "https://techcrunch.com/2024/01/10/what-the-eu-ai-act-means-for-ai-companies/",
+      "source_type": "web",
+      "retrieved_at": "2024-01-15T10:05:00Z",
+      "title": "What the EU AI Act means for AI companies",
+      "author": "Sarah Perez",
+      "published_at": "2024-01-10T14:30:00Z",
+      "fetch_status": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "content_length": 8200
+      },
+      "metadata": {
+        "server": "cloudflare"
+      }
+    },
+    {
+      "stable_id": "source-deepmind-research-safety",
+      "original_url": "https://deepmind.google/discover/blog/introducing-alignment-gym/",
+      "source_type": "web",
+      "retrieved_at": "2024-01-15T10:10:00Z",
+      "title": "Introducing Alignment Gym: A new platform for AI safety research",
+      "author": "DeepMind Research Team",
+      "published_at": "2024-01-08T11:00:00Z",
+      "fetch_status": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "content_length": 5600
+      }
+    },
+    {
+      "stable_id": "source-cisa-ai-cybersecurity-guidance",
+      "original_url": "https://www.cisa.gov/ai-cybersecurity-guidance",
+      "source_type": "web",
+      "retrieved_at": "2024-01-15T10:15:00Z",
+      "title": "AI Cybersecurity Guidance",
+      "fetch_status": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8"
+      },
+      "metadata": {
+        "gov_source": "true"
+      }
+    },
+    {
+      "stable_id": "source-techcrunch-ai-funding-2023",
+      "original_url": "https://techcrunch.com/2024/01/05/ai-startup-funding-dropped-80-in-2023/",
+      "source_type": "web",
+      "retrieved_at": "2024-01-15T10:20:00Z",
+      "title": "AI startup funding dropped 80% in 2023",
+      "author": "Kyle Wiggers",
+      "published_at": "2024-01-05T16:00:00Z",
+      "fetch_status": {
+        "http_status": 200,
+        "content_type": "text/html; charset=utf-8"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "id": "claim-001",
+      "statement": "The EU AI Act was formally adopted on January 12, 2024.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-eu-parliament-ai-act-2024",
+          "excerpts": [
+            {
+              "text": "The European Parliament officially adopted the EU AI Act on 12 January 2024, marking a historic milestone in AI regulation.",
+              "start_offset": 245,
+              "end_offset": 378
+            }
+          ],
+          "claim_context": "Direct statement of adoption date from official EU Parliament source."
+        }
+      ]
+    },
+    {
+      "id": "claim-002",
+      "statement": "The EU AI Act will enter into force 20 days after its publication in the Official Journal.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-eu-parliament-ai-act-2024",
+          "excerpts": [
+            {
+              "text": "The regulation will enter into force 20 days after its publication in the Official Journal of the European Union.",
+              "start_offset": 512,
+              "end_offset": 626
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-003",
+      "statement": "Prohibited AI practices under the EU AI Act will apply six months after entry into force.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-eu-parliament-ai-act-2024",
+          "excerpts": [
+            {
+              "text": "Prohibited AI practices will apply six months after entry into force, on 2 August 2024.",
+              "start_offset": 720,
+              "end_offset": 808
+            }
+          ],
+          "claim_context": "Calculates implementation date based on 20-day entry into force plus 6 months."
+        }
+      ]
+    },
+    {
+      "id": "claim-004",
+      "statement": "High-risk AI systems will have a 36-month compliance window.",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "source_id": "source-eu-parliament-ai-act-2024",
+          "excerpts": [
+            {
+              "text": "High-risk AI systems will need to comply within 36 months of entry into force.",
+              "start_offset": 945,
+              "end_offset": 1023
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-005",
+      "statement": "AI startups with general-purpose models must register in an EU database before 2 February 2025.",
+      "confidence": "medium",
+      "uncertainty_notes": "This date is inferred from the 12-month registration deadline combined with publication timing. Slight variance possible depending on Official Journal publication date.",
+      "evidence": [
+        {
+          "source_id": "source-eu-parliament-ai-act-2024",
+          "excerpts": [
+            {
+              "text": "Providers of general-purpose AI models must register in the EU database within 12 months of entry into force.",
+              "start_offset": 1150,
+              "end_offset": 1261
+            }
+          ],
+          "claim_context": "The 12-month period plus approximately 12-month publication timeline yields February 2025."
+        }
+      ]
+    },
+    {
+      "id": "claim-006",
+      "statement": "AI funding for startups dropped approximately 80% in 2023 compared to 2022.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-techcrunch-ai-funding-2023",
+          "excerpts": [
+            {
+              "text": "Venture capital investment in AI startups fell by approximately 80% in 2023, with total funding dropping from $15 billion in 2022 to $3 billion in 2023.",
+              "start_offset": 890,
+              "end_offset": 1048
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-007",
+      "statement": "Google DeepMind released Alignment Gym, a platform for AI safety research.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-deepmind-research-safety",
+          "excerpts": [
+            {
+              "text": "Today we're introducing Alignment Gym, a new open platform designed to help researchers evaluate and improve AI alignment.",
+              "start_offset": 156,
+              "end_offset": 269
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-008",
+      "statement": "The EU AI Act categorizes AI systems into four risk levels: unacceptable, high, limited, and minimal.",
+      "confidence": "medium",
+      "uncertainty_notes": "Terminology may vary slightly between sources. Some documents use 'unacceptable risk' while others use 'prohibited'.",
+      "evidence": [
+        {
+          "source_id": "source-techcrunch-ai-act-analysis",
+          "excerpts": [
+            {
+              "text": "The law establishes a risk-based framework with four categories: unacceptable risk systems that are banned, high-risk systems with strict obligations, limited risk systems with transparency requirements, and minimal risk systems with no additional obligations.",
+              "start_offset": 445,
+              "end_offset": 694
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-009",
+      "statement": "CISA has published AI cybersecurity guidance for federal agencies.",
+      "confidence": "high",
+      "evidence": [
+        {
+          "source_id": "source-cisa-ai-cybersecurity-guidance",
+          "excerpts": [
+            {
+              "text": "CISA's AI Cybersecurity Guidance provides federal agencies with recommendations for securing AI systems and mitigating associated risks.",
+              "start_offset": 234,
+              "end_offset": 367
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim-010",
+      "statement": "Some industry observers express concern that the EU AI Act may slow innovation for smaller AI companies.",
+      "confidence": "low",
+      "uncertainty_notes": "This is an industry opinion, not a factual claim. The validity of this concern is debated and depends on future outcomes.",
+      "evidence": [
+        {
+          "source_id": "source-techcrunch-ai-act-analysis",
+          "excerpts": [
+            {
+              "text": "Some industry analysts worry that compliance costs may disproportionately burden smaller AI startups compared to established tech companies.",
+              "start_offset": 1234,
+              "end_offset": 1370
+            }
+          ],
+          "claim_context": "Categorized as low confidence because this represents an opinion/concern rather than an objective fact."
+        }
+      ]
+    },
+    {
+      "id": "claim-011",
+      "statement": "Exact compliance costs for small AI companies remain uncertain and vary by jurisdiction and sector.",
+      "confidence": "medium",
+      "evidence": [],
+      "is_unsupported": true
+    }
+  ],
+  "contradictions": [],
+  "unresolved_questions": [
+    {
+      "id": "question-001",
+      "question": "What specific documentation requirements will apply to general-purpose AI models in practice?",
+      "why_unresolved": "The EU AI Act establishes the principle but detailed implementing regulations are expected to be published in 2024. No official guidance document is currently available.",
+      "priority": "high",
+      "related_claim_ids": ["claim-005"]
+    },
+    {
+      "id": "question-002",
+      "question": "How will enforcement mechanisms be implemented for cross-border AI systems?",
+      "why_unresolved": "While the EU AI Act establishes the regulatory framework, enforcement procedures and authority allocations between member states are still being formalized.",
+      "priority": "medium"
+    }
+  ],
+  "research_notes": [
+    {
+      "id": "note-001",
+      "content": "Sources from EU Parliament official website considered highest reliability for factual claims about the Act's text and timeline.",
+      "note_type": "methodology",
+      "related_source_ids": ["source-eu-parliament-ai-act-2024"]
+    },
+    {
+      "id": "note-002",
+      "content": "TechCrunch articles provide good industry perspective but should be cross-referenced with official EU documentation for factual accuracy.",
+      "note_type": "observation",
+      "related_source_ids": ["source-techcrunch-ai-act-analysis", "source-techcrunch-ai-funding-2023"]
+    },
+    {
+      "id": "note-003",
+      "content": "TODO: Verify exact publication date of AI Act in Official Journal to confirm claim-005 date calculation.",
+      "note_type": "todo",
+      "related_claim_ids": ["claim-005"]
+    }
+  ]
+}
