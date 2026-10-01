@@ -1,0 +1,34 @@
+version: 2
+
+updates:
+  # Go modules updates
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+    target-branch: "main"
+    commit-message:
+      prefix: "go:"
+      prefix-development: "go:"
+    labels:
+      - "dependencies"
+      - "go"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "02:00"
+    target-branch: "main"
+    commit-message:
+      prefix: "actions:"
+      prefix-development: "actions:"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 5
