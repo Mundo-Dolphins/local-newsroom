@@ -1,3 +1,4 @@
+//go:build ignore
 // Package orchestrator holds the plumbing that sequences the newsroom's
 // internal stages (fetching, researching, verifying).
 //
