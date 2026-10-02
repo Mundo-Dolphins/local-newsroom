@@ -23,9 +23,195 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Enable auto-merge for dependency PRs
+      - name: Setup GitHub CLI
         run: |
-          PR_URL="${{ github.event.pull_request.html_url }}"
-          gh pr merge --auto --squash "$PR_URL"
+          curl -fsSL https://cli.github.com/packages/githubcli-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Analyze PR and update branch if needed
+        id: analyze
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          PR="$PR_NUMBER"
+          URL="$PR_URL"
+          
+          # Fetch comprehensive PR state
+          echo "=== Fetching PR $PR state ==="
+          
+          # Get PR details including mergeability and behind status
+          PR_DATA=$(gh pr view "$PR" --json state,mergeable,headRefName,baseRefName,baselineCommit,commitHeadline,databaseId,url,commitsBeforeMergeHead,commitsBeforeMergeBase --jq '.')
+          
+          STATE=$(echo "$PR_DATA" | jq -r '.state')
+          MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          BASE_REF=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          COMMITS_BEHIND=$(echo "$PR_DATA" | jq -r '.commitsBeforeMergeBase // empty')
+          
+          echo "PR State: $STATE"
+          echo "Mergeable: $MERGEABLE"
+          echo "Head: $HEAD_REF"
+          echo "Base: $BASE_REF"
+          echo "Commits behind: ${COMMITS_BEHIND:-0}"
+          
+          # Determine state using clear state machine
+          # State definitions:
+          # - CURRENT: PR is mergeable (up to date and no conflicts)
+          # - BEHIND: PR branch has commits from base but is mergeable (behind but can be updated cleanly)
+          # - CONFLICTING: PR.mergeable == false (actual merge conflicts)
+          # - UNKNOWN: Other edge cases (e.g., draft, too many remote heads, etc.)
+          
+          if [ "$MERGEABLE" = "true" ]; then
+            echo "=== State: CURRENT ==="
+            echo "PR is mergeable - proceeding to auto-merge"
+            echo "ACTION=ENABLE_AUTOMERGE"
+          elif [ -n "$COMMITS_BEHIND" ] && [ "$COMMITS_BEHIND" != "null" ] && [ "$COMMITS_BEHIND" != "0" ]; then
+            echo "=== State: BEHIND ==="
+            echo "PR branch is behind base by $COMMITS_BEHIND commits but may be mergeable"
+            echo "ACTION=UPDATE_BRANCH"
+          elif [ "$MERGEABLE" = "false" ]; then
+            echo "=== State: CONFLICTING ==="
+            echo "PR has merge conflicts"
+            echo "ACTION=REQUEST_REBASE"
+          else
+            echo "=== State: UNKNOWN ==="
+            echo "Cannot determine PR state reliably"
+            echo "ACTION=SKIP"
+          fi
+          
+          # Record decision for next step
+          echo "PR_ANALYSIS_STATE=$(echo "$PR_DATA" | jq -r '.mergeable == "true" && "CURRENT" or (.commitsBeforeMergeBase != null and .commitsBeforeMergeBase != "0" and .commitsBeforeMergeBase != "null") && "BEHIND" or (.mergeable == "false") && "CONFLICTING" or "UNKNOWN")' >> $GITHUB_OUTPUT
+
+      - name: Update branch if behind
+        if: steps.analyze.outputs.PR_ANALYSIS_STATE == 'BEHIND'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="$PR_NUMBER"
+          
+          echo "=== Updating PR branch ==="
+          echo "Requesting rebase of PR #$PR onto base branch..."
+          
+          # Attempt to update branch using gh pr update-branch --rebase
+          # This does NOT resolve conflicts, only rebases if possible
+          if gh pr update-branch "$PR" --rebase 2>&1 | tee /tmp/gh-update.log; then
+            echo "Branch update command succeeded"
+            
+            # Verify the update by re-fetching PR state
+            sleep 3
+            
+            NEW_MERGEABLE=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+            echo "After update, mergeable status: $NEW_MERGEABLE"
+            
+            if [ "$NEW_MERGEABLE" = "true" ]; then
+              echo "Branch update succeeded - PR is now current"
+              echo "SET_STATE=CURRENT"
+            else
+              echo "Branch update completed but PR still shows as non-mergeable"
+              echo "SET_STATE=CONFLICTING"
+            fi
+          else
+            echo "Branch update failed - checking reason..."
+            
+            # Re-check state after failed update attempt
+            MERGEABLE_AFTER=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+            echo "Mergeable status after failed update: $MERGEABLE_AFTER"
+            
+            if [ "$MERGEABLE_AFTER" = "false" ]; then
+              echo "PR still has conflicts"
+              echo "SET_STATE=CONFLICTING"
+            else
+              echo "PR state unclear after update - assuming current"
+              echo "SET_STATE=CURRENT"
+            fi
+          fi
+
+      - name: Request Dependabot rebase for conflicting PR
+        if: steps.analyze.outputs.PR_ANALYSIS_STATE == 'CONFLICTING' || steps.analyze.outputs.SET_STATE == 'CONFLICTING'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="$PR_NUMBER"
+          USER="$PR_USER"
+          
+          echo "=== Requesting Dependabot rebase ==="
+          
+          # Only Dependabot PRs can use @dependabot rebase
+          # Renovate PRs use @renovate regenerate
+          if [[ "$USER" == "dependabot[bot]" || "$USER" == "dependabot-preview[bot]" ]]; then
+            echo "Dependabot PR detected. Posting @dependabot rebase request..."
+            
+            # Use gh pr comment to post the rebase request
+            if gh pr comment "$PR" --body "@dependabot rebase" 2>&1; then
+              echo "Successfully posted @dependabot rebase request"
+            else
+              echo "Warning: Failed to post @dependabot rebase request"
+              echo "Consider checking if GITHUB_TOKEN has PR write permissions"
+              echo "REBASE_COMMENT_FAILED=true" >> $GITHUB_ENV
+            fi
+          elif [[ "$USER" == "renovate[bot]" ]]; then
+            echo "Renovate PR detected. Posting @renovate regenerate request..."
+            
+            if gh pr comment "$PR" --body "@renovate regenerate" 2>&1; then
+              echo "Successfully posted @renovate regenerate request"
+            else
+              echo "Warning: Failed to post @renovate regenerate request"
+            fi
+          else
+            echo "Unrecognized bot user: $USER. Cannot auto-request rebase."
+            echo "NOTE: GITHUB_TOKEN may not have permission to comment on PRs from non-workflow bots."
+            echo "To enable this, consider adding a workflow-specific token in secrets."
+          fi
+
+      - name: Enable auto-merge if PR is current
+        if: steps.analyze.outputs.PR_ANALYSIS_STATE == 'CURRENT' || steps.analyze.outputs.SET_STATE == 'CURRENT'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="$PR_NUMBER"
+          URL="$PR_URL"
+          
+          echo "=== Enabling auto-merge ==="
+          
+          # Final verification before enabling auto-merge
+          FINAL_STATE=$(gh pr view "$PR" --json state,mergeable --jq '.state')
+          FINAL_MERGEABLE=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+          
+          echo "Final PR state: $FINAL_STATE"
+          echo "Final mergeable status: $FINAL_MERGEABLE"
+          
+          if [ "$FINAL_MERGEABLE" = "true" ] && [ "$FINAL_STATE" = "OPEN" ]; then
+            echo "PR is mergeable and open. Enabling auto-merge..."
+            
+            # Enable squash auto-merge
+            # This respects required checks and branch protection
+            if gh pr merge --auto --squash "$URL"; then
+              echo "Auto-merge enabled successfully"
+            else
+              echo "Warning: Failed to enable auto-merge"
+              echo "PR may have become unmergeable between checks"
+            fi
+          elif [ "$FINAL_MERGEABLE" = "false" ]; then
+            echo "PR is not mergeable (conflicts). Auto-merge skipped."
+            echo "Dependabot/renovate has been requested to rebase."
+          else
+            echo "PR state is $FINAL_STATE. Auto-merge skipped."
+            echo "Possible reasons: PR is closed, merged, or draft"
+          fi
+
+      - name: Log final status
+        run: |
+          echo "=== Workflow execution complete ==="
+          echo "PR: ${{ github.event.pull_request.html_url }}"
+          echo "Initial state: ${{ steps.analyze.outputs.PR_ANALYSIS_STATE }}"
+          echo "After update: ${{ steps.analyze.outputs.SET_STATE || 'unchanged' }}"
+          echo "Action taken: See previous steps"
