@@ -12,11 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor/html"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/fetcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/search"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/types"
 )
 
@@ -25,7 +28,10 @@ type Config struct {
 	// Topic is the research topic (required).
 	Topic string
 
-	// URLs to fetch and research (at least one required).
+	// URLs to fetch and research.
+	// When AutoDiscover is false (default), at least one URL is required.
+	// When AutoDiscover is true and URLs is empty, URLs will be discovered.
+	// When AutoDiscover is true and URLs is provided, supplement mode is enabled.
 	URLs []string
 
 	// OutputPath is the path to write the dossier JSON.
@@ -57,6 +63,27 @@ type Config struct {
 
 	// FetchTimeout is the timeout for HTTP fetch requests in seconds.
 	FetchTimeout float64
+
+	// AutoDiscover enables automatic source discovery from the topic.
+	// When true and URLs is empty, discovery is performed before fetching.
+	// When true and URLs is provided, supplement mode merges discovered URLs.
+	// When false (default), requires explicit URLs.
+	AutoDiscover bool
+
+	// DiscoveryConfig configures the source discovery process.
+	// Only used when AutoDiscover is true.
+	DiscoveryConfig discovery.Config
+
+	// DiscoveryService is an optional discovery service instance.
+	// If nil, a new Discovery instance is created with DiscoveryConfig.
+	// This allows dependency injection for testing.
+	DiscoveryService discoveryService
+
+	// SupplementMode enables supplement mode when AutoDiscover is true.
+	// In supplement mode, explicit URLs are fetched first, then discovered
+	// URLs are appended (with deduplication). When false, discovered URLs
+	// only (no explicit URLs) are used.
+	SupplementMode bool
 }
 
 // Workflow performs the research pipeline.
@@ -72,11 +99,13 @@ func New(cfg Config) *Workflow {
 // Run executes the research pipeline.
 //
 // It performs these steps:
-// 1. Fetch all URLs concurrently
-// 2. Extract documents from successful fetches
-// 3. Send normalized documents to the Researcher
-// 4. Validate the generated dossier
-// 5. Write the dossier to the output path
+// 1. If AutoDiscover is enabled and no URLs provided, discover source candidates
+// 2. If SupplementMode is enabled, merge explicit URLs with discovered candidates
+// 3. Fetch all URLs concurrently
+// 4. Extract documents from successful fetches
+// 5. Send normalized documents to the Researcher
+// 6. Validate the generated dossier
+// 7. Write the dossier to the output path
 //
 // Returns an error if any step fails. Invalid output (malformed JSON, invalid
 // references, missing required fields) causes a clear non-zero exit.
@@ -85,22 +114,167 @@ func (w *Workflow) Run(ctx context.Context) error {
 	if w.config.Topic == "" {
 		return fmt.Errorf("topic is required")
 	}
-	if len(w.config.URLs) == 0 {
-		return fmt.Errorf("at least one URL is required")
-	}
 
-	// Step 1: Fetch all URLs
-	fetchClient := fetcher.NewClient(w.config.FetcherConfig)
-	fetchResults := fetchClient.FetchMany(ctx, w.config.URLs)
+	// Determine the final URLs to fetch
+	var finalURLs []string
+
+	if w.config.AutoDiscover {
+		// Discovery mode: either discover only or supplement mode
+		if w.config.SupplementMode && len(w.config.URLs) > 0 {
+			// Supplement mode: fetch explicit URLs first, then discovered
+			// Step 1a: Fetch explicit URLs
+			fetchClient := fetcher.NewClient(w.config.FetcherConfig)
+			explicitFetchResults := fetchClient.FetchMany(ctx, w.config.URLs)
+
+			// Collect successful fetches from explicit URLs
+			var explicitSuccesses []fetcher.FetchItem
+			var fetchErrors []fetchFailure
+			for _, result := range explicitFetchResults {
+				if result.Success {
+					explicitSuccesses = append(explicitSuccesses, result)
+				} else {
+					fetchErrors = append(fetchErrors, fetchFailure{
+						URL: result.URL,
+						Err: result.Error,
+					})
+				}
+			}
+
+			// If all explicit URL fetches failed, fail clearly
+			if len(explicitSuccesses) == 0 && len(fetchErrors) > 0 {
+				return &ResearchFailure{
+					Type:          "fetch_failure",
+					Message:       "All explicit URL fetches failed",
+					FetchFailures: convertToFetchFailures(fetchErrors),
+				}
+			}
+
+			// Report partial failures
+			if len(fetchErrors) > 0 {
+				fmt.Fprintf(os.Stderr, "Warning: %d of %d explicit URLs failed to fetch:\n", len(fetchErrors), len(w.config.URLs))
+				for _, failure := range convertToFetchFailures(fetchErrors) {
+					fmt.Fprintf(os.Stderr, "  %s: %s\n", failure.String(), failure.Err.Error())
+				}
+				fmt.Fprintf(os.Stderr, "Proceeding with %d successful explicit fetches and discovery...\n", len(explicitSuccesses))
+			}
+
+			// Collect explicit URLs for deduplication
+			explicitURLs := make([]string, 0, len(explicitSuccesses))
+			for _, ex := range explicitSuccesses {
+				explicitURLs = append(explicitURLs, ex.Result.FinalURL)
+			}
+
+			// Step 1b: Discover additional sources
+			discService, discErr := w.getDiscoveryService()
+			if discErr != nil {
+				// Discovery service not configured - fail with clear error
+				return &ResearchFailure{
+					Type:    "config_error",
+					Message: "discovery service not configured: " + discErr.Error(),
+				}
+			}
+			candidates, err := discService.Discover(ctx, w.config.Topic, "", nil)
+			if err != nil {
+				// Discovery failure in supplement mode - continue with explicit URLs
+				fmt.Fprintf(os.Stderr, "Warning: discovery failed: %v. Proceeding with explicit URLs only.\n", err)
+				finalURLs = explicitURLs
+			} else if len(candidates.Candidates) == 0 {
+				// No candidates discovered - continue with explicit URLs
+				fmt.Fprintf(os.Stderr, "Warning: no candidates discovered. Proceeding with explicit URLs only.\n")
+				finalURLs = explicitURLs
+			} else {
+				// Merge explicit and discovered URLs with deduplication
+				finalURLs = mergeURLs(explicitURLs, extractCandidateURLs(candidates.Candidates))
+			}
+
+			// Continue to extraction with explicit success results
+			return w.continueFromFetches(ctx, explicitSuccesses, finalURLs)
+		} else if len(w.config.URLs) == 0 {
+			// Discovery only: discover URLs first
+			// Step 1: Discover sources
+			discService, discErr := w.getDiscoveryService()
+			if discErr != nil {
+				// Discovery service not configured - fail with clear error
+				return &ResearchFailure{
+					Type:    "config_error",
+					Message: "discovery service not configured: " + discErr.Error(),
+				}
+			}
+			candidates, err := discService.Discover(ctx, w.config.Topic, "", nil)
+			if err != nil {
+				// Discovery failure - return structured error
+				var de *discovery.DiscoveryError
+				if discovery.IsDiscoveryError(err) != nil {
+					de = discovery.IsDiscoveryError(err)
+					return &ResearchFailure{
+						Type:              "discovery_failure",
+						Message:           de.Message,
+						DiscoveryQueryErr: de.QueryResults,
+					}
+				}
+				return &ResearchFailure{
+					Type:    "discovery_failure",
+					Message: "source discovery failed: " + err.Error(),
+				}
+			}
+
+			if len(candidates.Candidates) == 0 {
+				return &ResearchFailure{
+					Type:    "discovery_failure",
+					Message: "no source candidates discovered",
+				}
+			}
+
+			// Extract URLs from candidates
+			finalURLs = extractCandidateURLs(candidates.Candidates)
+
+			// Step 2: Fetch discovered URLs
+			return w.continueFromFetches(ctx, nil, finalURLs)
+		} else {
+			// AutoDiscover true but URLs provided - this is not a valid combination
+			// unless SupplementMode is enabled
+			return &ResearchFailure{
+				Type:    "config_error",
+				Message: "AutoDiscover=true with URLs provided requires SupplementMode=true",
+			}
+		}
+	} else {
+		// Explicit mode (v0.1): URLs must be provided
+		if len(w.config.URLs) == 0 {
+			return fmt.Errorf("at least one URL is required")
+		}
+
+		// Step 1: Fetch all URLs
+		fetchClient := fetcher.NewClient(w.config.FetcherConfig)
+		fetchResults := fetchClient.FetchMany(ctx, w.config.URLs)
+
+		// Continue to extraction with explicit URLs
+		return w.continueFromFetches(ctx, fetchResults, w.config.URLs)
+	}
+}
+
+// continueFromFetches continues the pipeline from fetch results, supporting
+// both explicit fetches (when SupplementMode is enabled) and discovered URLs.
+func (w *Workflow) continueFromFetches(ctx context.Context, explicitSuccesses []fetcher.FetchItem, finalURLs []string) error {
+	var fetchResults []fetcher.FetchItem
+
+	if explicitSuccesses != nil {
+		// In supplement mode, we already have successful fetches
+		fetchResults = explicitSuccesses
+	} else {
+		// Fetch discovered URLs
+		fetchClient := fetcher.NewClient(w.config.FetcherConfig)
+		fetchResults = fetchClient.FetchMany(ctx, finalURLs)
+	}
 
 	// Collect successful fetches and report failures
 	var successfulURLs []string
-	var fetchErrors []FetchFailure
+	var fetchErrors []fetchFailure
 	for _, result := range fetchResults {
 		if result.Success {
 			successfulURLs = append(successfulURLs, result.Result.FinalURL)
 		} else {
-			fetchErrors = append(fetchErrors, FetchFailure{
+			fetchErrors = append(fetchErrors, fetchFailure{
 				URL: result.URL,
 				Err: result.Error,
 			})
@@ -112,26 +286,26 @@ func (w *Workflow) Run(ctx context.Context) error {
 		return &ResearchFailure{
 			Type:          "fetch_failure",
 			Message:       "All URL fetches failed",
-			FetchFailures: fetchErrors,
+			FetchFailures: convertToFetchFailures(fetchErrors),
 		}
 	}
 
 	// Report partial fetch failures
 	if len(fetchErrors) > 0 {
 		fmt.Fprintf(os.Stderr, "Warning: %d of %d URLs failed to fetch:\n", len(fetchErrors), len(fetchResults))
-		for _, failure := range fetchErrors {
+		for _, failure := range convertToFetchFailures(fetchErrors) {
 			fmt.Fprintf(os.Stderr, "  %s: %s\n", failure.String(), failure.Err.Error())
 		}
 		fmt.Fprintf(os.Stderr, "Proceeding with %d successful fetches...\n", len(successfulURLs))
 	}
 
-	// Step 2: Extract documents from successful fetches
+	// Step: Extract documents from successful fetches
 	extractorConfig := w.config.ExtractorConfig
 	extractorConfig.Validate()
 	hex := html.New(extractorConfig)
 
 	var documents []types.Document
-	var extractionErrors []ExtractionFailure
+	var extractionErrors []extractionFailure
 	for _, result := range fetchResults {
 		if !result.Success {
 			continue
@@ -144,7 +318,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 
 		if err != nil {
 			extractionErr := err.(*extractor.ExtractionError)
-			extractionErrors = append(extractionErrors, ExtractionFailure{
+			extractionErrors = append(extractionErrors, extractionFailure{
 				URL:      result.URL,
 				FinalURL: result.Result.FinalURL,
 				Err:      extractionErr,
@@ -160,21 +334,21 @@ func (w *Workflow) Run(ctx context.Context) error {
 		return &ResearchFailure{
 			Type:               "extraction_failure",
 			Message:            "All extractions failed",
-			FetchFailures:      fetchErrors,
-			ExtractionFailures: extractionErrors,
+			FetchFailures:      convertToFetchFailures(fetchErrors),
+			ExtractionFailures: convertToExtractionFailures(extractionErrors),
 		}
 	}
 
 	// Report partial extraction failures
 	if len(extractionErrors) > 0 {
 		fmt.Fprintf(os.Stderr, "Warning: %d of %d URLs failed extraction:\n", len(extractionErrors), len(successfulURLs))
-		for _, failure := range extractionErrors {
+		for _, failure := range convertToExtractionFailures(extractionErrors) {
 			fmt.Fprintf(os.Stderr, "  %s: %s\n", failure.String(), failure.Err.Error())
 		}
 		fmt.Fprintf(os.Stderr, "Proceeding with %d successfully extracted documents...\n", len(documents))
 	}
 
-	// Step 3: Generate dossier using the Researcher
+	// Step: Generate dossier using the Researcher
 	// Build LLM client
 	llmBaseURL := w.config.LLMBaseURL
 	if llmBaseURL == "" {
@@ -246,7 +420,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 4: Validate the dossier
+	// Step: Validate the dossier
 	if err := dossier.Validate(); err != nil {
 		return &ResearchFailure{
 			Type:    "dossier_validation",
@@ -254,7 +428,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 5: Write the dossier to output path
+	// Step: Write the dossier to output path
 	if err := writeDossier(w.config.OutputPath, dossier); err != nil {
 		return &ResearchFailure{
 			Type:    "output_error",
@@ -266,6 +440,36 @@ func (w *Workflow) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// getDiscoveryService returns the configured discovery service.
+// When AutoDiscover is enabled, the DiscoveryService must be configured
+// by the caller (via Dependency Injection or by setting DiscoveryConfig).
+// If neither is provided, an error is returned.
+func (w *Workflow) getDiscoveryService() (discoveryService, error) {
+	if w.config.DiscoveryService != nil {
+		return w.config.DiscoveryService, nil
+	}
+	// For now, we require explicit injection. In production, this would
+	// construct a discovery.Discovery instance from DiscoveryConfig.
+	return nil, fmt.Errorf("AutoDiscover enabled but DiscoveryService not configured. " +
+		"Set DiscoveryService field or implement discovery.Service with a valid Provider and Planner")
+}
+
+// discoveryService is an interface for source discovery services.
+// This abstraction allows dependency injection and testing without
+// coupling the workflow to specific discovery implementations.
+type discoveryService interface {
+	// Discover performs source discovery and returns candidates.
+	// The candidates can then be used as URLs for fetching.
+	Discover(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint) (*discovery.DiscoveryResult, error)
+}
+
+// fetchFailure represents a failed URL fetch (internal type).
+type fetchFailure struct {
+	URL      string
+	FinalURL string
+	Err      *fetcher.FetchError
 }
 
 // FetchFailure represents a failed URL fetch.
@@ -282,6 +486,13 @@ func (f FetchFailure) String() string {
 	return f.FinalURL
 }
 
+// extractionFailure represents a failed document extraction (internal type).
+type extractionFailure struct {
+	URL      string
+	FinalURL string
+	Err      *extractor.ExtractionError
+}
+
 // ExtractionFailure represents a failed document extraction.
 type ExtractionFailure struct {
 	URL      string
@@ -296,12 +507,67 @@ func (e ExtractionFailure) String() string {
 	return e.FinalURL
 }
 
+// convertToFetchFailures converts internal fetchFailures to public FetchFailures.
+func convertToFetchFailures(internal []fetchFailure) []FetchFailure {
+	result := make([]FetchFailure, 0, len(internal))
+	for _, f := range internal {
+		result = append(result, FetchFailure(f))
+	}
+	return result
+}
+
+// convertToExtractionFailures converts internal extractionFailures to public ExtractionFailures.
+func convertToExtractionFailures(internal []extractionFailure) []ExtractionFailure {
+	result := make([]ExtractionFailure, 0, len(internal))
+	for _, f := range internal {
+		result = append(result, ExtractionFailure(f))
+	}
+	return result
+}
+
+// extractCandidateURLs extracts URLs from a list of discovery candidates.
+func extractCandidateURLs(candidates []discovery.Candidate) []string {
+	result := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		result = append(result, c.CandidateURL)
+	}
+	return result
+}
+
+// mergeURLs merges two URL lists with deduplication, preserving explicit URLs first.
+// Explicit URLs appear first in the result, followed by discovered URLs that are not duplicates.
+func mergeURLs(explicitURLs, discoveredURLs []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(explicitURLs)+len(discoveredURLs))
+
+	// Add explicit URLs first
+	for _, url := range explicitURLs {
+		normalized := strings.ToLower(strings.TrimSpace(url))
+		if !seen[normalized] {
+			seen[normalized] = true
+			result = append(result, url)
+		}
+	}
+
+	// Add discovered URLs that are not duplicates
+	for _, url := range discoveredURLs {
+		normalized := strings.ToLower(strings.TrimSpace(url))
+		if !seen[normalized] {
+			seen[normalized] = true
+			result = append(result, url)
+		}
+	}
+
+	return result
+}
+
 // ResearchFailure is a structured error for research pipeline failures.
 type ResearchFailure struct {
 	Type               string
 	Message            string
 	FetchFailures      []FetchFailure
 	ExtractionFailures []ExtractionFailure
+	DiscoveryQueryErr  []discovery.QueryResult
 }
 
 func (r *ResearchFailure) Error() string {
@@ -314,7 +580,7 @@ func (r *ResearchFailure) Error() string {
 // IsFailFast returns true if the failure type indicates the entire pipeline should stop.
 func (r *ResearchFailure) IsFailFast() bool {
 	switch r.Type {
-	case "llm_config", "researcher_init", "researcher_error", "dossier_validation":
+	case "llm_config", "researcher_init", "researcher_error", "dossier_validation", "discovery_failure", "config_error":
 		return true
 	default:
 		return false
@@ -398,4 +664,29 @@ func defaultDuration(seconds float64) time.Duration {
 		return time.Duration(seconds) * time.Second
 	}
 	return 60 * time.Second // 60 seconds
+}
+
+// NewDiscoveryService creates a new discovery service from configuration.
+// This is a convenience function for production use when you want to use
+// discovery.Discovery with default dependencies.
+//
+// To use this function, you must provide:
+//   - planner: A discovery.Planner implementation
+//   - provider: A search.Provider implementation
+//
+// Example:
+//
+//	discCfg := workflow.DefaultDiscoveryConfig()
+//	discService := workflow.NewDiscoveryService(
+//		planner.New(plannerClient, "local-llm", plannerCfg),
+//		searchProvider,
+//		discCfg,
+//	)
+//	wfConfig := workflow.Config{
+//		Topic:            "European AI regulations",
+//		AutoDiscover:     true,
+//		DiscoveryService: discService,
+//	}
+func NewDiscoveryService(planner discovery.Planner, provider search.Provider, cfg discovery.Config) *discovery.Discovery {
+	return discovery.NewDiscovery(planner, provider, cfg)
 }
