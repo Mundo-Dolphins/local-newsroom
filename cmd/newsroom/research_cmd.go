@@ -49,6 +49,7 @@ type researchFlags struct {
 	outputPath   string
 	llmBaseURL   string
 	llmModel     string
+	llmAPIKey    string
 	llmTimeout   float64
 	fetchTimeout float64
 	maxSize      int64
@@ -65,6 +66,7 @@ func init() {
 	researchCmd.Flags().StringVarP(&rFlags.outputPath, "output", "o", "dossier.json", "Output path for dossier JSON")
 	researchCmd.Flags().StringVar(&rFlags.llmBaseURL, "llm-base-url", "", "LLM API base URL (default: OMLX_BASE_URL env var)")
 	researchCmd.Flags().StringVar(&rFlags.llmModel, "llm-model", "", "LLM model name (default: OMLX_MODEL env var)")
+	researchCmd.Flags().StringVar(&rFlags.llmAPIKey, "llm-api-key", "", "LLM API key for authentication (default: OMLX_API_KEY env var)")
 	researchCmd.Flags().Float64Var(&rFlags.llmTimeout, "llm-timeout", 120, "LLM request timeout in seconds")
 	researchCmd.Flags().Float64Var(&rFlags.fetchTimeout, "fetch-timeout", 30, "HTTP fetch timeout in seconds")
 	researchCmd.Flags().Int64Var(&rFlags.maxSize, "max-size", 10*1024*1024, "Maximum response size in bytes")
@@ -125,6 +127,7 @@ func doResearch(cmd *cobra.Command, args []string) error {
 		ResearcherConfig: researcherConfig,
 		LLMBaseURL:       rFlags.llmBaseURL,
 		LLMModel:         rFlags.llmModel,
+		LLMAPIKey:        rFlags.llmAPIKey,
 		LLMTimeout:       rFlags.llmTimeout,
 	}
 

@@ -48,6 +48,10 @@ type Config struct {
 	// Can also be set via OMLX_MODEL environment variable.
 	LLMModel string
 
+	// LLMAPIKey is the API key for LLM authentication.
+	// Can also be set via OMLX_API_KEY environment variable.
+	LLMAPIKey string
+
 	// LLMTimeout is the timeout for LLM requests in seconds.
 	LLMTimeout float64
 
@@ -201,12 +205,19 @@ func (w *Workflow) Run(ctx context.Context) error {
 		}
 	}
 
+	// Get API key from flag or environment
+	llmAPIKey := w.config.LLMAPIKey
+	if llmAPIKey == "" {
+		llmAPIKey = os.Getenv("OMLX_API_KEY")
+	}
+
 	// Set up LLM client
 	var llmClient llm.Client
 	if llmBaseURL != "" {
 		llmClient = llm.NewClient(llm.Config{
 			BaseURL: llmBaseURL,
 			Model:   llmModel,
+			APIKey:  llmAPIKey,
 			Timeout: defaultDuration(llmTimeout),
 		})
 	} else {

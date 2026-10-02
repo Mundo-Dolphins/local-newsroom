@@ -25,6 +25,7 @@ newsroom research \
 | `--output`, `-o` | No | Output path for dossier JSON (default: `dossier.json`) |
 | `--llm-base-url` | No | LLM API base URL (default: `OMLX_BASE_URL` env var) |
 | `--llm-model` | No | LLM model name (default: `OMLX_MODEL` env var) |
+| `--llm-api-key` | No | LLM API key for authentication (default: `OMLX_API_KEY` env var) |
 | `--llm-timeout` | No | LLM request timeout in seconds (default: 120) |
 | `--fetch-timeout` | No | HTTP fetch timeout in seconds (default: 30) |
 | `--max-size` | No | Maximum response size in bytes (default: 10MB) |
@@ -37,6 +38,61 @@ newsroom research \
 |----------|-------------|
 | `OMLX_BASE_URL` | LLM API base URL (e.g., `http://localhost:8000/v1`) |
 | `OMLX_MODEL` | LLM model name (e.g., `llama3.1:8b`) |
+| `OMLX_API_KEY` | LLM API key for authentication (optional, required by some oMLX instances) |
+
+### Authentication
+
+The `newsroom research` command supports authentication for oMLX instances that require an API key. The API key can be provided via:
+
+1. **Environment variable** (`OMLX_API_KEY`):
+
+```bash
+export OMLX_BASE_URL="http://mac-studio:8000/v1"
+export OMLX_MODEL="Qwen3.8-27B-8bit"
+export OMLX_API_KEY="your-api-key-here"
+
+newsroom research \
+  --topic "Example research topic" \
+  --url "https://example.com"
+```
+
+2. **CLI flag** (`--llm-api-key`):
+
+```bash
+newsroom research \
+  --llm-api-key "your-api-key-here" \
+  --topic "Example research topic" \
+  --url "https://example.com"
+```
+
+**Precedence**: The CLI flag takes precedence over the environment variable. If neither is provided, the request is sent without authentication (suitable for oMLX instances that do not require an API key).
+
+### Example: Authenticated oMLX Server
+
+For a fully authenticated workflow, set all LLM configuration:
+
+```bash
+export OMLX_BASE_URL="http://mac-studio:8000/v1"
+export OMLX_MODEL="Qwen3.8-27B-8bit"
+export OMLX_API_KEY="..."
+
+newsroom research \
+  --topic "Example research topic" \
+  --url "https://example.com"
+```
+
+Or use the CLI flag for the API key only:
+
+```bash
+newsroom research \
+  --llm-api-key "..." \
+  --llm-base-url "http://mac-studio:8000/v1" \
+  --llm-model "Qwen3.8-27B-8bit" \
+  --topic "Example research topic" \
+  --url "https://example.com"
+```
+
+**Note**: The API key is sent as `Authorization: Bearer <key>` in HTTP requests and is never logged or included in error messages.
 
 ## Development commands
 
