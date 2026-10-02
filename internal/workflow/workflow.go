@@ -7,6 +7,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/search"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/search/searxng"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/types"
 )
 
@@ -84,6 +86,28 @@ type Config struct {
 	// URLs are appended (with deduplication). When false, discovered URLs
 	// only (no explicit URLs) are used.
 	SupplementMode bool
+
+	// SearchBaseURL is the base URL for the SearXNG search instance.
+	// Required when AutoDiscover is true. Can also be set via SEARXNG_BASE_URL.
+	SearchBaseURL string
+
+	// SearchLanguage is the preferred language for search results.
+	// RFC 5646 language tag (e.g., "en", "en-US", "es").
+	// Can also be set via SEARXNG_SEARCH_LANGUAGE.
+	SearchLanguage string
+
+	// SearchTimeRange specifies time range for search results.
+	// SearXNG-specific values like "last_week", "last_month", "last_year".
+	// Can also be set via SEARXNG_SEARCH_TIME_RANGE.
+	SearchTimeRange string
+
+	// SearchAPIKey is optional API key for SearXNG authentication.
+	// Can also be set via SEARXNG_API_KEY.
+	SearchAPIKey string
+
+	// SearchAPIHeader is the header name for SearXNG API key.
+	// Can also be set via SEARXNG_API_HEADER.
+	SearchAPIHeader string
 }
 
 // Workflow performs the research pipeline.
@@ -443,17 +467,144 @@ func (w *Workflow) continueFromFetches(ctx context.Context, explicitSuccesses []
 }
 
 // getDiscoveryService returns the configured discovery service.
-// When AutoDiscover is enabled, the DiscoveryService must be configured
-// by the caller (via Dependency Injection or by setting DiscoveryConfig).
-// If neither is provided, an error is returned.
+// When AutoDiscover is enabled, it constructs a discovery.Discovery instance
+// from DiscoveryConfig if DiscoveryService is not explicitly set.
 func (w *Workflow) getDiscoveryService() (discoveryService, error) {
 	if w.config.DiscoveryService != nil {
 		return w.config.DiscoveryService, nil
 	}
-	// For now, we require explicit injection. In production, this would
-	// construct a discovery.Discovery instance from DiscoveryConfig.
-	return nil, fmt.Errorf("AutoDiscover enabled but DiscoveryService not configured. " +
-		"Set DiscoveryService field or implement discovery.Service with a valid Provider and Planner")
+
+	// Construct discovery service from DiscoveryConfig
+	if w.config.DiscoveryConfig.MaxSearchQueries == 0 {
+		w.config.DiscoveryConfig = discovery.DefaultConfig()
+	}
+
+	// Build SearXNG provider from discovery config
+	// The discovery.Config should contain search provider info
+	discService, err := w.buildDiscoveryServiceFromConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build discovery service: %w", err)
+	}
+
+	return discService, nil
+}
+
+// buildDiscoveryServiceFromConfig constructs a discovery.Discovery from the config.
+func (w *Workflow) buildDiscoveryServiceFromConfig() (*discovery.Discovery, error) {
+	// Build SearXNG provider with config precedence: CLI flag -> env var -> default
+	searchBaseURL := w.config.SearchBaseURL
+	if searchBaseURL == "" {
+		searchBaseURL = os.Getenv("SEARXNG_BASE_URL")
+	}
+
+	if searchBaseURL == "" {
+		return nil, errors.New("no search base URL configured. Set SEARXNG_BASE_URL or use --search-base-url")
+	}
+
+	searchConfig := &searxng.Config{
+		BaseURL:         searchBaseURL,
+		HTTPTimeout:     30 * time.Second,
+		MaxResponseSize: 1024 * 1024,
+		UserAgent:       "local-newsroom/0.0.1",
+	}
+
+	// Build LLM client for planner
+	llmBaseURL, llmModel, llmAPIKey := w.getLLMConfig()
+
+	if llmBaseURL == "" {
+		return nil, errors.New("no LLM endpoint configured. Set OMLX_BASE_URL or use --llm-base-url")
+	}
+
+	llmClient := llm.NewClient(llm.Config{
+		BaseURL: llmBaseURL,
+		Model:   llmModel,
+		APIKey:  llmAPIKey,
+		Timeout: 120 * time.Second,
+	})
+
+	// Build planner
+	plannerConfig := planner.Config{
+		MinQueries:      2,
+		MaxQueries:      w.config.DiscoveryConfig.MaxSearchQueries,
+		Temperature:     0.5,
+		MaxOutputTokens: 4000,
+	}
+
+	// Adapt llmClient to planner.Client interface
+	adapter := &llmToPlannerClientAdapter{
+		client: llmClient,
+		model:  llmModel,
+	}
+
+	plg, err := planner.New(adapter, llmModel, plannerConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create planner: %w", err)
+	}
+
+	// Validate and create SearXNG provider
+	if err := searchConfig.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid SearXNG configuration: %w", err)
+	}
+
+	provider, err := searxng.NewProvider(searchConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SearXNG provider: %w", err)
+	}
+
+	// Create discovery service
+	discService := discovery.NewDiscovery(plg, provider, w.config.DiscoveryConfig)
+
+	return discService, nil
+}
+
+// getLLMConfig returns LLM configuration from workflow config or environment.
+func (w *Workflow) getLLMConfig() (string, string, string) {
+	// Precedence: workflow config -> environment variables
+	baseURL := w.config.LLMBaseURL
+	if baseURL == "" {
+		baseURL = os.Getenv("OMLX_BASE_URL")
+	}
+
+	model := w.config.LLMModel
+	if model == "" {
+		model = os.Getenv("OMLX_MODEL")
+	}
+
+	apiKey := w.config.LLMAPIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("OMLX_API_KEY")
+	}
+
+	return baseURL, model, apiKey
+}
+
+// llmToPlannerClientAdapter adapts llm.Client to planner.Client.
+// This is needed because llm.Client and planner.Client use different
+// request/response types (llm.Request/Response vs planner.Request/Response).
+type llmToPlannerClientAdapter struct {
+	client llm.Client
+	model  string
+}
+
+// Complete implements planner.Client by converting between types.
+func (a *llmToPlannerClientAdapter) Complete(ctx context.Context, req planner.Request) (planner.Response, error) {
+	// Convert planner.Request to llm.Request
+	llmReq := llm.Request{
+		SystemPrompt:    req.SystemPrompt,
+		UserPrompt:      req.UserPrompt,
+		Model:           req.Model,
+		Temperature:     req.Temperature,
+		MaxOutputTokens: req.MaxOutputTokens,
+	}
+
+	// Call the underlying llm client
+	llmResp, err := a.client.Complete(ctx, llmReq)
+	if err != nil {
+		return planner.Response{}, err
+	}
+
+	// Convert llm.Response to planner.Response
+	return planner.Response{Content: llmResp.Content}, nil
 }
 
 // discoveryService is an interface for source discovery services.
