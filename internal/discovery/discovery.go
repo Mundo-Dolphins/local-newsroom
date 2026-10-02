@@ -109,7 +109,7 @@ func NewDiscovery(planner Planner, provider search.Provider, config Config) *Dis
 	// Merge configurations
 	cfg := config
 	if cfg.CandidateConfig != nil {
-		cfg.CandidateConfig = mergeCandidateConfig(cfg.CandidateConfig, cfg.MaxCandidates)
+		cfg.CandidateConfig = MergeCandidateConfig(cfg.CandidateConfig, cfg.MaxCandidates)
 	} else {
 		defaultCandidateCfg := candidate.DefaultConfig()
 		defaultCandidateCfg.MaxCandidates = cfg.MaxCandidates
@@ -124,8 +124,8 @@ func NewDiscovery(planner Planner, provider search.Provider, config Config) *Dis
 	}
 }
 
-// mergeCandidateConfig merges candidate configuration with discovery limits.
-func mergeCandidateConfig(base *candidate.Config, maxCandidates int) *candidate.Config {
+// MergeCandidateConfig merges candidate configuration with discovery limits.
+func MergeCandidateConfig(base *candidate.Config, maxCandidates int) *candidate.Config {
 	if base == nil {
 		base = &candidate.Config{}
 	}
