@@ -469,3 +469,158 @@ func (f *FakeLLMClient) Complete(ctx context.Context, req llm.Request) (llm.Resp
 	}
 	return llm.Response{Content: f.Response}, nil
 }
+
+// TestAPIKey tests API key configuration and precedence.
+func TestAPIKey(t *testing.T) {
+	t.Run("API key from flag takes precedence over env var", func(t *testing.T) {
+		// Set env var
+		os.Setenv("OMLX_API_KEY", "env-key-123") //nolint:errcheck
+		defer os.Unsetenv("OMLX_API_KEY")        //nolint:errcheck
+
+		// Create a server that captures the Authorization header
+		var capturedAuth string
+		llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"content": "test"})
+		}))
+		defer llmServer.Close()
+
+		// Create a content server
+		contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><body><p>Test</p></body></html>`))
+		}))
+		defer contentServer.Close()
+
+		// Config with flag API key
+		cfg := Config{
+			Topic:      "Test",
+			URLs:       []string{contentServer.URL},
+			OutputPath: "/tmp/test_api_key.json",
+			LLMBaseURL: llmServer.URL,
+			LLMModel:   "test-model",
+			LLMAPIKey:  "flag-key-456", // CLI flag should take precedence
+		}
+
+		// Run workflow - we'll catch the file write error since response format doesn't match expected JSON
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := New(cfg).Run(ctx)
+		// Expect some error (not about API key)
+		if err == nil {
+			t.Fatal("Expected error, got nil")
+		}
+
+		// Verify the captured Authorization header has the flag key, not the env var
+		if capturedAuth != "Bearer flag-key-456" {
+			t.Errorf("Expected Authorization 'Bearer flag-key-456', got %q", capturedAuth)
+		}
+
+		// Clean up
+		_ = os.Remove("/tmp/test_api_key.json")
+	})
+
+	t.Run("API key from env var when flag not provided", func(t *testing.T) {
+		os.Unsetenv("OMLX_API_KEY") //nolint:errcheck
+
+		// Set env var
+		os.Setenv("OMLX_API_KEY", "env-key-789") //nolint:errcheck
+		defer os.Unsetenv("OMLX_API_KEY")        //nolint:errcheck
+
+		// Create a server that captures the Authorization header
+		var capturedAuth string
+		llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"content": "test"})
+		}))
+		defer llmServer.Close()
+
+		// Create a content server
+		contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><body><p>Test</p></body></html>`))
+		}))
+		defer contentServer.Close()
+
+		// Config without flag API key (should use env var)
+		cfg := Config{
+			Topic:      "Test",
+			URLs:       []string{contentServer.URL},
+			OutputPath: "/tmp/test_api_key_env.json",
+			LLMBaseURL: llmServer.URL,
+			LLMModel:   "test-model",
+			LLMAPIKey:  "", // No flag, should use env var
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := New(cfg).Run(ctx)
+		if err == nil {
+			t.Fatal("Expected error, got nil")
+		}
+
+		// Verify the captured Authorization header has the env var key
+		if capturedAuth != "Bearer env-key-789" {
+			t.Errorf("Expected Authorization 'Bearer env-key-789', got %q", capturedAuth)
+		}
+
+		// Clean up
+		_ = os.Remove("/tmp/test_api_key_env.json")
+	})
+
+	t.Run("no Authorization header when API key empty", func(t *testing.T) {
+		os.Unsetenv("OMLX_API_KEY") //nolint:errcheck
+
+		// Create a server that verifies no Authorization header
+		var capturedAuth string
+		llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"content": "test"})
+		}))
+		defer llmServer.Close()
+
+		// Create a content server
+		contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><body><p>Test</p></body></html>`))
+		}))
+		defer contentServer.Close()
+
+		// Config with empty API key
+		cfg := Config{
+			Topic:      "Test",
+			URLs:       []string{contentServer.URL},
+			OutputPath: "/tmp/test_api_key_empty.json",
+			LLMBaseURL: llmServer.URL,
+			LLMModel:   "test-model",
+			LLMAPIKey:  "", // Empty
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := New(cfg).Run(ctx)
+		if err == nil {
+			t.Fatal("Expected error, got nil")
+		}
+
+		// Verify no Authorization header was sent
+		if capturedAuth != "" {
+			t.Errorf("Expected no Authorization header, got %q", capturedAuth)
+		}
+
+		// Clean up
+		_ = os.Remove("/tmp/test_api_key_empty.json")
+	})
+}
