@@ -76,6 +76,10 @@ type Config struct {
 	// Only used when AutoDiscover is true.
 	DiscoveryConfig discovery.Config
 
+	// PlannersPromptOverride is an optional prompt override for the Search Query Planner.
+	// If empty, uses the search-planner.prompt file from prompts/search-planner.prompt.
+	PlannerPromptOverride string
+
 	// DiscoveryService is an optional discovery service instance.
 	// If nil, a new Discovery instance is created with DiscoveryConfig.
 	// This allows dependency injection for testing.
@@ -528,6 +532,7 @@ func (w *Workflow) buildDiscoveryServiceFromConfig() (*discovery.Discovery, erro
 		MaxQueries:      w.config.DiscoveryConfig.MaxSearchQueries,
 		Temperature:     0.5,
 		MaxOutputTokens: 4000,
+		PromptOverride:  w.config.PlannerPromptOverride,
 	}
 
 	// Adapt llmClient to planner.Client interface
