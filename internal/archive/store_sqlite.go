@@ -36,11 +36,11 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+
 	"sort"
 	"strconv"
 	"strings"
@@ -49,6 +49,9 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/types"
 	_ "modernc.org/sqlite"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // SQLiteStore is a Store implementation backed by SQLite.
 //
@@ -306,65 +309,29 @@ type migration struct {
 func (s *SQLiteStore) loadMigrations() ([]migration, error) {
 	var migrations []migration
 
-	// Try different migration directory paths
-	migrationPaths := []string{
-		"internal/archive/migrations",
-		"./internal/archive/migrations",
-		"migrations",
+	// Known migration files (list hardcoded to avoid directory listing)
+	migrationFiles := []string{
+		"001_initial_schema.sql",
 	}
 
-	var migrationDir string
-	for _, path := range migrationPaths {
-		// Check if the path exists
-		if _, err := os.Stat(path); err == nil {
-			migrationDir = path
-			break
-		}
-	}
-
-	if migrationDir == "" {
-		return nil, errors.New("migrations directory not found")
-	}
-
-	// Read directory entries using os package
-	entries, err := os.ReadDir(migrationDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".sql") {
-			continue
-		}
-
+	for _, name := range migrationFiles {
 		// Parse version from filename (e.g., "001_initial_schema.sql" -> 1)
-		parts := strings.Split(name, "_")
-		if len(parts) < 1 {
-			continue
-		}
-
-		versionStr := strings.TrimPrefix(parts[0], "0")
+		versionStr := strings.TrimPrefix(strings.Split(name, "_")[0], "0")
 		version, err := strconv.Atoi(versionStr)
 		if err != nil {
 			continue
 		}
 
-		// Read migration content
-		path := filepath.Join(migrationDir, name)
-		content, err := os.ReadFile(path)
+		// Read migration content from embedded filesystem
+		path := "migrations/" + name
+		fileContent, err := migrationsFS.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration file %s: %w", name, err)
 		}
 
 		migrations = append(migrations, migration{
 			Version: version,
-			Path:    path,
-			Content: string(content),
+			Content: string(fileContent),
 		})
 	}
 
@@ -375,8 +342,6 @@ func (s *SQLiteStore) loadMigrations() ([]migration, error) {
 
 	return migrations, nil
 }
-
-// applyMigration applies a single migration.
 func (s *SQLiteStore) applyMigration(m migration) error {
 	tx, err := s.db.Begin()
 	if err != nil {
