@@ -163,7 +163,67 @@ search:
 
 Without JSON output enabled, the search API may return HTTP 403 Forbidden.
 
+### Source & Search Provenance
+
+The pipeline tracks the complete provenance of all sources:
+
+- **Search provenance**: Each source records which search query discovered it, preserving
+  the query text and result ranking.
+- **Source provenance**: When the same URL is discovered by multiple queries, the
+  pipeline tracks which query found it first and maintains that as the primary
+  discovery source.
+- **Metadata**: Sources include fields like `originalURL`, `searchQuery`, `searchRank`,
+  and `provenance` that enable audit trails and reproducibility.
+
 ### Discovery Limits
+
+Automatic discovery has built-in limits to prevent excessive resource usage:
+
+| Limit | Default | Range | Description |
+|-------|---------|-------|-------------|
+| Max search queries | 5 | 1-10 | Maximum number of SearXNG queries |
+| Results per query | 10 | 1-100 | Maximum results per query |
+| Max sources | 0 (unlimited) | 0-N | Maximum candidate URLs returned |
+
+These limits are configurable via `--search-max-queries`, `--search-results-per-query`,
+and `--search-max-sources` flags.
+
+### Budget & Constraints
+
+The system enforces budgets at multiple stages:
+
+1. **Search budget**: Max queries × results per query limits total search results
+2. **Fetch budget**: Timeout and size limits prevent resource exhaustion
+3. **Extraction budget**: Word limits prevent processing excessively long documents
+4. **Candidate selection**: Ranking and deduplication ensure high-quality sources
+
+### Testing & Coverage
+
+The project includes comprehensive end-to-end verification with **deterministic offline tests**:
+
+- **20 E2E tests** covering all research scenarios
+- **Fake LLM and SearXNG servers** for deterministic, reproducible testing
+- **No external network access** - tests are fully offline and deterministic
+- **Coverage maintained at ≥80%** across all packages
+
+Test scenarios include:
+- Successful topic-only research
+- Multiple search queries with overlapping URLs
+- Partial failures (search/fetch/extraction)
+- No-results failure handling
+- URL-only fallback (v0.1 compatibility)
+- Source/search provenance verification
+- Candidate selection and ranking
+- Concurrent fetch operations
+- Determinism verification
+
+### Limitations
+
+- **SearXNG required** for automatic discovery (URL-only mode works without it)
+- **External LLM required** for planning and research (not supported for local inference)
+- **Test constraints**: E2E tests use fake servers; real integration requires live
+  SearXNG and LLM endpoints
+- **v0.2 only**: RAG and Writer functionality from v0.3 are not implemented
 
 Automatic discovery has built-in limits to prevent excessive resource usage:
 
