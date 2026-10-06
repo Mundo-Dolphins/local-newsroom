@@ -422,6 +422,19 @@ func composeChunkID(docID StableDocumentID, contentHash ContentHash, position, l
 //
 // Returns an error if the chunk ID format is invalid.
 func parseChunkID(id StableChunkID) (StableDocumentID, ContentHash, int, int, error) {
+	return parseChunkIDInternal(string(id))
+}
+
+// ParseChunkIDInternal is an exported version for testing that parses a StableChunkID string.
+//
+// Expected format: "arch_doc:<document_id>:<content_hash>:<position>:<length>"
+//
+// Returns an error if the chunk ID format is invalid.
+func ParseChunkIDInternal(id string) (StableDocumentID, ContentHash, int, int, error) {
+	return parseChunkIDInternal(id)
+}
+
+func parseChunkIDInternal(id string) (StableDocumentID, ContentHash, int, int, error) {
 	parts := strings.Split(string(id), ":")
 	if len(parts) != 5 || parts[0] != "arch_doc" {
 		return "", "", 0, 0, fmt.Errorf("invalid chunk ID format: %s", id)
