@@ -10,11 +10,10 @@ package researcher
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -22,6 +21,9 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/types"
 )
+
+//go:embed prompts/*.prompt
+var researcherPromptsFS embed.FS
 
 // Researcher produces a ResearchDossier from a topic and source documents.
 //
@@ -70,18 +72,10 @@ func New(client llm.Client, model string, config ClientConfig) (*Researcher, err
 	// Load the prompt template
 	prompt := config.PromptOverride
 	if prompt == "" {
-		// Read from repo root: prompts/researcher.prompt relative to the module
-		// We construct the path from the package directory
-		// internal/researcher -> ../.. -> repo root
-		pkgDir, err := os.Getwd()
+		// Read prompt from embedded filesystem
+		promptBytes, err := researcherPromptsFS.ReadFile("prompts/researcher.prompt")
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
-		promptPath := filepath.Join(filepath.Dir(pkgDir), "..", "prompts", "researcher.prompt")
-		promptPath = filepath.Clean(promptPath)
-		promptBytes, err := os.ReadFile(promptPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read prompt template from %s: %w", promptPath, err)
+			return nil, fmt.Errorf("failed to read prompt template: %w", err)
 		}
 		prompt = string(promptBytes)
 	}

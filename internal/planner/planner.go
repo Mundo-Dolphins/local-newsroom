@@ -14,13 +14,16 @@ package planner
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+
 	"strings"
 )
+
+//go:embed prompts/*.prompt
+var promptsFS embed.FS
 
 // Planner produces a SearchPlan from a research topic and optional hints.
 //
@@ -96,18 +99,10 @@ func New(client Client, model string, config Config) (*Planner, error) {
 	// Load the prompt template
 	prompt := config.PromptOverride
 	if prompt == "" {
-		// Read from repo root: prompts/search-planner.prompt relative to the module
-		// We construct the path from the package directory
-		// internal/planner -> ../.. -> repo root
-		pkgDir, err := os.Getwd()
+		// Read prompt from embedded filesystem
+		promptBytes, err := promptsFS.ReadFile("prompts/search-planner.prompt")
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
-		promptPath := filepath.Join(filepath.Dir(pkgDir), "..", "prompts", "search-planner.prompt")
-		promptPath = filepath.Clean(promptPath)
-		promptBytes, err := os.ReadFile(promptPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read prompt template from %s: %w", promptPath, err)
+			return nil, fmt.Errorf("failed to read prompt template: %w", err)
 		}
 		prompt = string(promptBytes)
 	}
