@@ -27,7 +27,11 @@
 //	err := store.UpsertDocument(ctx, doc, chunks)
 package archive
 
-import "context"
+import (
+	"context"
+
+	"database/sql"
+)
 
 // Store is the interface for interacting with the archive.
 //
@@ -149,6 +153,29 @@ type Store interface {
 	//
 	// Implementations may perform lightweight checks (e.g., database connection).
 	HealthCheck(ctx context.Context) error
+
+	// Vector operations (implementation-specific)
+	//
+	// These methods provide direct access to embedding vectors stored in the database.
+	// They are useful for batch operations and are not part of the high-level retrieval API.
+
+	// GetEmbeddingVector retrieves the raw embedding vector for a chunk.
+	//
+	// Returns nil if the chunk has no embedding vector.
+	// Returns ChunkNotFoundError if the chunk does not exist.
+	GetEmbeddingVector(ctx context.Context, chunkID StableChunkID) ([]float32, error)
+
+	// SetEmbeddingVector stores the raw embedding vector for a chunk.
+	//
+	// Use with SetEmbeddingMetadata to store both metadata and vector.
+	// The vector is stored as a BLOB (JSON-encoded float32 array) for portability.
+	SetEmbeddingVector(ctx context.Context, chunkID StableChunkID, vector []float32) error
+
+	// BeginTx begins a new database transaction.
+	//
+	// This is useful for batching operations that need to be atomic.
+	// The caller is responsible for committing or rolling back.
+	BeginTx(ctx context.Context) (*sql.Tx, error)
 }
 
 // DocumentNotFoundError is returned when a requested document does not exist.
