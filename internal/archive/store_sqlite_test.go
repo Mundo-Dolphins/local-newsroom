@@ -11,7 +11,6 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/types"
 )
 
-// TestSQLiteStore_New creates a temporary database for testing.
 func TestSQLiteStore_New(t *testing.T) {
 	t.Parallel()
 
@@ -22,7 +21,7 @@ func TestSQLiteStore_New(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore failed: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.HealthCheck(context.Background()); err != nil {
 		t.Errorf("HealthCheck failed: %v", err)
@@ -36,7 +35,7 @@ func TestSQLiteStore_New_Memory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore failed: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.HealthCheck(context.Background()); err != nil {
 		t.Errorf("HealthCheck failed: %v", err)
@@ -57,7 +56,7 @@ func TestSQLiteStore_NewWithConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStoreWithConfig failed: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.HealthCheck(context.Background()); err != nil {
 		t.Errorf("HealthCheck failed: %v", err)
@@ -123,13 +122,13 @@ func TestSQLiteStore_PersistsData(t *testing.T) {
 		t.Fatalf("UpsertDocument failed: %v", err)
 	}
 
-	store1.Close()
+	_ = store1.Close()
 
 	store2, err := NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore failed: %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	retrieved, err := store2.GetDocument(ctx, "test-doc")
 	if err != nil {
@@ -881,10 +880,12 @@ func TestSQLiteStore_TransactionRollback(t *testing.T) {
 		t.Fatalf("BeginTx failed: %v", err)
 	}
 
-	err = tx.QueryRow("SELECT COUNT(*) FROM documents").Scan(nil)
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM documents").Scan(&count); err != nil {
+		t.Fatalf("QueryRow failed: %v", err)
+	}
 
-	err = tx.Rollback()
-	if err != nil {
+	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 
@@ -931,24 +932,24 @@ func TestSQLiteStore_ForeignKeysEnforced(t *testing.T) {
 	}
 }
 
-
-// TestSQLiteStore_ConcurrentAccess tests concurrent access.
-// NOTE: This test is flaky due to SQLite's file locking limitations.
-// SQLite is primarily a single-writer database and concurrent writes will fail intermittently.
+// Note: TestSQLiteStore_ConcurrentAccess is disabled due to SQLite's file locking
+// limitations. SQLite is primarily a single-writer database and concurrent writes
+// will fail intermittently. This is expected behavior.
+//
 // func TestSQLiteStore_ConcurrentAccess(t *testing.T) {
 // 	t.Parallel()
-// 
+//
 // 	tmpDir := t.TempDir()
 // 	dbPath := filepath.Join(tmpDir, "concurrent.db")
-// 
+//
 // 	store, err := NewSQLiteStore(dbPath)
 // 	if err != nil {
 // 		t.Fatalf("NewSQLiteStore failed: %v", err)
 // 	}
-// 	defer store.Close()
-// 
+// 	defer func() { _ = store.Close() }()
+//
 // 	ctx := context.Background()
-// 
+//
 // 	errs := make(chan error, 10)
 // 	for i := 0; i < 10; i++ {
 // 		go func(n int) {
@@ -969,23 +970,23 @@ func TestSQLiteStore_ForeignKeysEnforced(t *testing.T) {
 // 			errs <- err
 // 		}(i)
 // 	}
-// 
+//
 // 	successes := 0
 // 	for i := 0; i < 10; i++ {
 // 		if err := <-errs; err == nil {
 // 			successes++
 // 		}
 // 	}
-// 
+//
 // 	if successes < 1 {
 // 		t.Errorf("Only %d inserts succeeded, expected at least 1", successes)
 // 	}
-// 
+//
 // 	docs, err := store.ListDocuments(ctx, 0)
 // 	if err != nil {
 // 		t.Fatalf("ListDocuments failed: %v", err)
 // 	}
-// 
+//
 // 	if len(docs) < 1 {
 // 		t.Errorf("Got %d documents, expected at least 1 (some may have failed due to locking)", len(docs))
 // 	}
@@ -1025,21 +1026,25 @@ func TestSQLiteStore_RetrieveTextQuery(t *testing.T) {
 		ArchivedAt: time.Now(),
 	}
 
-	store.UpsertDocument(ctx, doc1, []Chunk{{
+	if err := store.UpsertDocument(ctx, doc1, []Chunk{{
 		StableID:         "arch_doc:doc-1:hash-1:0:10",
 		DocumentStableID: "doc-1",
 		ContentHash:      "chunk-1",
 		Position:         0,
 		Length:           10,
-	}})
+	}}); err != nil {
+		t.Fatalf("UpsertDocument failed: %v", err)
+	}
 
-	store.UpsertDocument(ctx, doc2, []Chunk{{
+	if err := store.UpsertDocument(ctx, doc2, []Chunk{{
 		StableID:         "arch_doc:doc-2:hash-2:0:10",
 		DocumentStableID: "doc-2",
 		ContentHash:      "chunk-2",
 		Position:         0,
 		Length:           10,
-	}})
+	}}); err != nil {
+		t.Fatalf("UpsertDocument failed: %v", err)
+	}
 
 	query := RetrievalQuery{
 		Text:   "brown fox",
@@ -1280,23 +1285,8 @@ func newTestStore(t *testing.T) *SQLiteStore {
 	}
 
 	t.Cleanup(func() {
-		store.Close()
-		os.Remove(dbPath)
-	})
-
-	return store
-}
-
-func newInMemoryStore(t *testing.T) *SQLiteStore {
-	t.Helper()
-
-	store, err := NewSQLiteStore(":memory:")
-	if err != nil {
-		t.Fatalf("NewSQLiteStore failed: %v", err)
-	}
-
-	t.Cleanup(func() {
-		store.Close()
+		_ = store.Close()
+		_ = os.Remove(dbPath)
 	})
 
 	return store

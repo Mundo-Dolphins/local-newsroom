@@ -150,10 +150,10 @@ type storeConfig struct {
 
 func defaultStoreConfig() storeConfig {
 	return storeConfig{
-		MaxOpenConns:  2,
-		MaxIdleConns:  1,
+		MaxOpenConns:    2,
+		MaxIdleConns:    1,
 		ConnMaxLifetime: 0,
-		EnableWal:     true,
+		EnableWal:       true,
 	}
 }
 
@@ -208,14 +208,14 @@ func (s *SQLiteStore) openWithConfig(config storeConfig) error {
 	}
 
 	if err := config.apply(s.db); err != nil {
-		s.db.Close()
+		_ = s.db.Close()
 		return err
 	}
 
 	// Enable foreign keys
 	_, err = s.db.Exec("PRAGMA foreign_keys = ON")
 	if err != nil {
-		s.db.Close()
+		_ = s.db.Close()
 		return fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
@@ -223,7 +223,7 @@ func (s *SQLiteStore) openWithConfig(config storeConfig) error {
 	if config.EnableWal {
 		_, err = s.db.Exec("PRAGMA journal_mode = WAL")
 		if err != nil {
-			s.db.Close()
+			_ = s.db.Close()
 			return fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
 	}
@@ -231,20 +231,20 @@ func (s *SQLiteStore) openWithConfig(config storeConfig) error {
 	// Set busy timeout (30 seconds for concurrent access)
 	_, err = s.db.Exec("PRAGMA busy_timeout = 30000")
 	if err != nil {
-		s.db.Close()
+		_ = s.db.Close()
 		return fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
 	// Enable writable temporary tables for better concurrent access
 	_, err = s.db.Exec("PRAGMA temp_store = MEMORY")
 	if err != nil {
-		s.db.Close()
+		_ = s.db.Close()
 		return fmt.Errorf("failed to set temp_store: %w", err)
 	}
 
 	// Run migrations
 	if err := s.runMigrations(); err != nil {
-		s.db.Close()
+		_ = s.db.Close()
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -386,7 +386,7 @@ func (s *SQLiteStore) applyMigration(m migration) error {
 	// Run migration SQL
 	_, err = tx.Exec(m.Content)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("failed to execute migration: %w", err)
 	}
 
@@ -397,7 +397,7 @@ func (s *SQLiteStore) applyMigration(m migration) error {
 		time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("failed to record migration: %w", err)
 	}
 
@@ -434,7 +434,6 @@ func decodeVector(data []byte) ([]float32, error) {
 
 // Time formatting constants
 const timeFormat = "2006-01-02 15:04:05.999999999"
-const timeFormatCompact = "2006-01-02T15:04:05.999999999Z07:00"
 
 func nowUTC() string {
 	return time.Now().UTC().Format(timeFormat)
@@ -445,13 +444,6 @@ func parseTime(s string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.Parse(timeFormat, s)
-}
-
-func parseTimeCompact(s string) (time.Time, error) {
-	if s == "" {
-		return time.Time{}, nil
-	}
-	return time.Parse(time.RFC3339, s)
 }
 
 func parseSourceType(s string) types.SourceType {
@@ -466,7 +458,7 @@ func parseSourceType(s string) types.SourceType {
 // ===============================================
 
 // CreateDocument implements Store.CreateDocument.
-func (s *SQLiteStore) CreateDocument(ctx context.Context, doc *ArchiveDocument, chunks []Chunk) error {
+func (s *SQLiteStore) CreateDocument(ctx context.Context, doc *ArchiveDocument, chunks []Chunk) (err error) {
 	if doc == nil {
 		return errors.New("document cannot be nil")
 	}
@@ -475,7 +467,11 @@ func (s *SQLiteStore) CreateDocument(ctx context.Context, doc *ArchiveDocument, 
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
 
 	// Check if document already exists
 	var exists int
@@ -537,7 +533,7 @@ func (s *SQLiteStore) CreateDocument(ctx context.Context, doc *ArchiveDocument, 
 }
 
 // UpsertDocument implements Store.UpsertDocument.
-func (s *SQLiteStore) UpsertDocument(ctx context.Context, doc *ArchiveDocument, chunks []Chunk) error {
+func (s *SQLiteStore) UpsertDocument(ctx context.Context, doc *ArchiveDocument, chunks []Chunk) (err error) {
 	if doc == nil {
 		return errors.New("document cannot be nil")
 	}
@@ -546,7 +542,11 @@ func (s *SQLiteStore) UpsertDocument(ctx context.Context, doc *ArchiveDocument, 
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
 
 	// Upsert document
 	_, err = tx.Exec(`
@@ -618,16 +618,16 @@ func (s *SQLiteStore) UpsertDocument(ctx context.Context, doc *ArchiveDocument, 
 // GetDocument implements Store.GetDocument.
 func (s *SQLiteStore) GetDocument(ctx context.Context, id StableDocumentID) (*ArchiveDocument, error) {
 	var (
-		plainText        string
-		plainTextHash    string
-		chunkCount       int
-		sourceID         string
-		sourceURL        sql.NullString
-		sourceType       string
-		retrievedAt      string
-		extractedAt      string
-		archivedAt       string
-		metadata         string
+		plainText     string
+		plainTextHash string
+		chunkCount    int
+		sourceID      string
+		sourceURL     sql.NullString
+		sourceType    string
+		retrievedAt   string
+		extractedAt   string
+		archivedAt    string
+		metadata      string
 	)
 
 	err := s.db.QueryRow(`
@@ -663,7 +663,7 @@ func (s *SQLiteStore) GetDocument(ctx context.Context, id StableDocumentID) (*Ar
 	// Parse metadata
 	var docMetadata map[string]string
 	if metadata != "" {
-		json.Unmarshal([]byte(metadata), &docMetadata)
+		_ = json.Unmarshal([]byte(metadata), &docMetadata)
 	}
 
 	return &ArchiveDocument{
@@ -672,11 +672,11 @@ func (s *SQLiteStore) GetDocument(ctx context.Context, id StableDocumentID) (*Ar
 		PlainTextHash: ContentHash(plainTextHash),
 		ChunkCount:    chunkCount,
 		SourceProvenance: SourceProvenance{
-			SourceID:    sourceID,
-			SourceURL:   sourceURL.String,
-			SourceType:  parseSourceType(sourceType),
-			RetrievedAt: retrievedAtTime,
-			ExtractedAt: extractedAtTime,
+			SourceID:           sourceID,
+			SourceURL:          sourceURL.String,
+			SourceType:         parseSourceType(sourceType),
+			RetrievedAt:        retrievedAtTime,
+			ExtractedAt:        extractedAtTime,
 			ExtractionMetadata: docMetadata,
 		},
 		ArchivedAt: archivedAtTime,
@@ -722,22 +722,22 @@ func (s *SQLiteStore) ListDocuments(ctx context.Context, limit int) ([]*ArchiveD
 	if err != nil {
 		return nil, fmt.Errorf("failed to list documents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var docs []*ArchiveDocument
 	for rows.Next() {
 		var (
-			stableID       string
-			plainText      string
-			plainTextHash  string
-			chunkCount     int
-			sourceID       string
-			sourceURL      sql.NullString
-			sourceType     string
-			retrievedAt    string
-			extractedAt    string
-			archivedAt     string
-			metadata       string
+			stableID      string
+			plainText     string
+			plainTextHash string
+			chunkCount    int
+			sourceID      string
+			sourceURL     sql.NullString
+			sourceType    string
+			retrievedAt   string
+			extractedAt   string
+			archivedAt    string
+			metadata      string
 		)
 
 		if err := rows.Scan(&stableID, &plainText, &plainTextHash, &chunkCount, &sourceID, &sourceURL, &sourceType, &retrievedAt, &extractedAt, &archivedAt, &metadata); err != nil {
@@ -752,7 +752,7 @@ func (s *SQLiteStore) ListDocuments(ctx context.Context, limit int) ([]*ArchiveD
 		// Parse metadata
 		var docMetadata map[string]string
 		if metadata != "" {
-			json.Unmarshal([]byte(metadata), &docMetadata)
+			_ = json.Unmarshal([]byte(metadata), &docMetadata)
 		}
 
 		doc := &ArchiveDocument{
@@ -761,11 +761,11 @@ func (s *SQLiteStore) ListDocuments(ctx context.Context, limit int) ([]*ArchiveD
 			PlainTextHash: ContentHash(plainTextHash),
 			ChunkCount:    chunkCount,
 			SourceProvenance: SourceProvenance{
-				SourceID:    sourceID,
-				SourceURL:   sourceURL.String,
-				SourceType:  parseSourceType(sourceType),
-				RetrievedAt: retrievedAtTime,
-				ExtractedAt: extractedAtTime,
+				SourceID:           sourceID,
+				SourceURL:          sourceURL.String,
+				SourceType:         parseSourceType(sourceType),
+				RetrievedAt:        retrievedAtTime,
+				ExtractedAt:        extractedAtTime,
 				ExtractionMetadata: docMetadata,
 			},
 			ArchivedAt: archivedAtTime,
@@ -838,7 +838,7 @@ func (s *SQLiteStore) GetChunksByDocument(ctx context.Context, docID StableDocum
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var chunks []Chunk
 	for rows.Next() {
@@ -1024,7 +1024,7 @@ func (s *SQLiteStore) GetChunksWithEmbeddingMetadata(ctx context.Context) ([]Chu
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunks with embeddings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var chunks []Chunk
 	for rows.Next() {
@@ -1206,7 +1206,7 @@ func boolToInt(b bool) int {
 }
 
 func (s *SQLiteStore) toJson(m map[string]string) string {
-	if m == nil || len(m) == 0 {
+	if len(m) == 0 {
 		return ""
 	}
 	data, err := json.Marshal(m)
