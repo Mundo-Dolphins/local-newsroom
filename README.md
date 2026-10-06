@@ -236,6 +236,186 @@ Automatic discovery has built-in limits to prevent excessive resource usage:
 These limits are configurable via `--search-max-queries`, `--search-results-per-query`,
 and `--search-max-sources` flags.
 
+## Archive Command
+
+The `newsroom archive` command provides a local-first semantic search system for
+news articles and web content. It archives URLs for later retrieval using embedding-based
+similarity search.
+
+### Commands
+
+#### Add to Archive
+
+Archive URLs to the local index. Supports incremental, idempotent ingestion.
+
+```bash
+# Add a single URL
+newsroom archive add --url https://example.com/article
+
+# Add multiple URLs
+newsroom archive add \
+  --url https://example.com/article1 \
+  --url https://example.com/article2
+
+# Add from a file (one URL per line)
+newsroom archive add --urls-file urls.txt
+```
+
+The archive pipeline:
+```
+URL -> fetcher -> extractor -> chunker -> embeddings -> SQLite
+```
+
+Repeated ingestion of the same content is idempotent - unchanged content is not
+re-archived. The command supports parallel fetching with configurable concurrency.
+
+#### Semantic Search
+
+Perform semantic search over archived content using embedding-based similarity.
+
+```bash
+# Basic search
+newsroom archive search --query "Miami Dolphins defensive coordinator"
+
+# Search with custom parameters
+newsroom archive search \
+  --query "Super Bowl predictions" \
+  --top-k 20 \
+  --format json
+
+# Search from stdin
+echo "AI regulations 2024" | newsroom archive search --from-stdin
+```
+
+Optionally enables reranking for improved accuracy using a cross-encoder model.
+
+#### Archive Statistics
+
+Display statistics about the local archive.
+
+```bash
+# Show archive stats
+newsroom archive stats
+
+# Show archive stats with custom database
+newsroom archive stats --db-path ./archive.db
+
+# Output as JSON
+newsroom archive stats --format json
+```
+
+Shows counts of documents, chunks, and embeddings.
+
+### Usage Examples
+
+#### Basic archiving and search
+
+```bash
+# Archive news articles
+newsroom archive add \
+  --url https://example.com/dolphins-news \
+  --url https://example.com/sports-update \
+  --db-path ~/newsroom/archive.db
+
+# Search later
+newsroom archive search \
+  --query "Dolphins playoff chances" \
+  --db-path ~/newsroom/archive.db
+```
+
+#### Search from stdin
+
+```bash
+# Search using a query from another command
+echo "$TOPIC" | newsroom archive search --from-stdin
+```
+
+### Flags
+
+#### Global Flags (all archive commands)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db-path` | `./archive.db` | Path to the archive SQLite database |
+| `--format` | `text` | Output format: `text` or `json` |
+| `--embedding-base-url` | `http://localhost:8000/v1` | Embedding API base URL |
+| `--embedding-model` | `all-MiniLM-L6-v2` | Embedding model name |
+| `--embedding-api-key` | - | API key for embedding API authentication |
+| `--embedding-timeout` | 30 | Embedding API timeout in seconds |
+| `--rerank-enabled` | - | Enable reranking for search |
+| `--rerank-model` | `bge-reranker` | Reranker model name |
+| `--top-k` | 10 | Top-K results for search |
+| `--version` | - | Print version and exit |
+
+#### Archive Add Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--url`, `-u` | - | URL to archive (can be specified multiple times) |
+| `--urls-file` | - | File containing URLs to archive (one per line) |
+| `--parallel-fetch` | 5 | Number of parallel fetch operations |
+| `--fetch-timeout` | 30 | HTTP fetch timeout in seconds |
+| `--max-size` | 10MB | Maximum response size in bytes |
+| `--max-words` | 50000 | Maximum words per document |
+| `--target-chunk-size` | 300 | Target chunk size in characters |
+| `--max-chunk-size` | 500 | Maximum chunk size in characters |
+| `--overlap-ratio` | 0.1 | Overlap ratio between chunks (0.0 to 0.99) |
+| `--progress` | true | Show progress during archiving |
+
+#### Archive Search Flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--query`, `-q` | Yes | Search query text |
+| `--from-stdin` | No | Read query from stdin |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ARCHIVE_DB_PATH` | Default database path (overrides `--db-path`) |
+| `EMBEDDING_BASE_URL` | Embedding API base URL |
+| `EMBEDDING_MODEL` | Embedding model name |
+| `EMBEDDING_API_KEY` | API key for embedding API authentication |
+| `OMLX_BASE_URL` | Base URL for oMLX embedding API |
+| `OMLX_MODEL` | oMLX model name |
+| `OMLX_API_KEY` | oMLX API key |
+
+**Precedence**: CLI flags take precedence over environment variables, which
+take precedence over hardcoded defaults.
+
+### Architecture
+
+```
+┌─────────┐    ┌───────────┐    ┌─────────┐    ┌───────────┐    ┌─────────┐
+│   URL   │───▶│  Fetcher  │───▶│ Extract │───▶│  Chunker  │───▶│  Embed  │
+└─────────┘    └───────────┘    └─────────┘    └───────────┘    └─────────┘
+                                                                            │
+                                                                            ▼
+                                                      ┌─────────────────────────┐
+                                                      │        SQLite           │
+                                                      │   (archive.db)          │
+                                                      │                         │
+                                                      │  ┌─────────────────┐    │
+                                                      │  │ documents       │    │
+                                                      │  │ chunks          │    │
+                                                      │  │ embedding_vectors │  │
+                                                      │  └─────────────────┘    │
+                                                      └─────────────────────────┘
+┌─────────┐    ┌───────────┐    ┌─────────┐    ┌───────────┐    ┌─────────┐
+│  Query  │───▶│  Embed    │───▶│ Retriever│───▶│ Reranker │───▶│ Results │
+└─────────┘    └───────────┘    └─────────┘    └───────────┘    └─────────┘
+```
+
+### Testing & Coverage
+
+The archive command includes comprehensive unit tests:
+
+- **Command registration**: Verifies all subcommands are registered
+- **Workflow tests**: Test the extract-chunk-embed-store pipeline
+- **Idempotency**: Verifies re-archiving same content produces same IDs
+- **Output formats**: Tests JSON and text output formats
+
 ## Development commands
 
 The project's common development and quality-gate commands live in the root
