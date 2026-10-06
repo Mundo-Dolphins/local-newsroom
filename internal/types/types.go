@@ -27,6 +27,12 @@ const (
 	SourceTypePDF SourceType = "pdf"
 	// SourceTypeUnknown indicates the source type could not be determined.
 	SourceTypeUnknown SourceType = "unknown"
+	// SourceTypeLive indicates a document fetched directly from the web during
+	// the current research run.
+	SourceTypeLive SourceType = "live"
+	// SourceTypeArchive indicates a document retrieved from the local historical
+	// archive rather than from the live web.
+	SourceTypeArchive SourceType = "archive"
 )
 
 // Source represents an input source that was retrieved from the internet.
@@ -106,6 +112,12 @@ type Document struct {
 	// This provides a traceable link back to the original retrieval.
 	SourceID string `json:"source_id"`
 
+	// DocumentType indicates the source of this document.
+	// For live-fetched documents, this will be SourceTypeLive.
+	// For archive-retrieved documents, this will be SourceTypeArchive.
+	// If not specified, defaults to SourceTypeLive.
+	DocumentType SourceType `json:"document_type,omitempty"`
+
 	// CanonicalURL is the canonical URL for this document, if known.
 	// This may differ from the Source.OriginalURL due to redirects, URL
 	// normalization, or publisher-provided canonical tags.
@@ -142,6 +154,11 @@ type Document struct {
 	// ExtractionMetadata captures provenance details about the extraction process.
 	// This includes things like the extraction method used, word count,
 	// or any validation flags set during cleaning.
+	// For archive sources, common keys include:
+	//   - "source": "archive"
+	//   - "document_stable_id": the archive document ID
+	//   - "chunk_position": position of chunk in document
+	//   - "relevance_score": retrieval relevance score
 	ExtractionMetadata map[string]string `json:"extraction_metadata,omitempty"`
 }
 
@@ -149,6 +166,19 @@ type Document struct {
 // Document fields that need to distinguish between unknown and empty.
 func PointerTo[T any](v T) *T {
 	return &v
+}
+
+// SplitBySource splits documents into live and archive sources.
+// This is useful for tracking provenance and reporting partial success.
+func SplitBySource(docs []Document) (live, archive []Document) {
+	for _, doc := range docs {
+		if doc.DocumentType == SourceTypeArchive {
+			archive = append(archive, doc)
+		} else {
+			live = append(live, doc)
+		}
+	}
+	return live, archive
 }
 
 // FetchStatusJSON is a helper type for JSON marshaling that preserves the
@@ -170,4 +200,22 @@ type DocumentJSON struct {
 	PublishedAt        *time.Time        `json:"published_at,omitempty"`
 	RetrievedAt        time.Time         `json:"retrieved_at"`
 	ExtractionMetadata map[string]string `json:"extraction_metadata,omitempty"`
+}
+
+// ResultWithSource holds a collection of documents with provenance tracking.
+type ResultWithSource struct {
+	// Documents is the complete list of documents to process.
+	Documents []Document
+
+	// LiveSources is the subset of documents from live fetches.
+	LiveSources []Document
+
+	// ArchiveSources is the subset of documents from the archive.
+	ArchiveSources []Document
+
+	// WasDeduplicated indicates whether any deduplication occurred.
+	WasDeduplicated bool
+
+	// ArchiveRetrieved indicates whether any archive data was retrieved.
+	ArchiveRetrieved bool
 }
