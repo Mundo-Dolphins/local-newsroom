@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/archiverev"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor/html"
@@ -105,13 +106,19 @@ type Config struct {
 	// Can also be set via SEARXNG_SEARCH_TIME_RANGE.
 	SearchTimeRange string
 
-	// SearchAPIKey is optional API key for SearXNG authentication.
-	// Can also be set via SEARXNG_API_KEY.
+	// SearchAPIHeader is the header name for SearXNG API key.
+	// Can also be set via SEARXNG_API_HEADER.
 	SearchAPIKey string
 
 	// SearchAPIHeader is the header name for SearXNG API key.
 	// Can also be set via SEARXNG_API_HEADER.
 	SearchAPIHeader string
+
+	// ArchiveConfig enables optional archive retrieval to supplement
+	// live web sources with historical archive chunks.
+	// When enabled, the workflow will query the archive for relevant
+	// chunks based on the research topic.
+	ArchiveConfig archiverev.Config
 }
 
 // Workflow performs the research pipeline.
@@ -376,6 +383,36 @@ func (w *Workflow) continueFromFetches(ctx context.Context, explicitSuccesses []
 		fmt.Fprintf(os.Stderr, "Proceeding with %d successfully extracted documents...\n", len(documents))
 	}
 
+	// Step: Retrieve archive chunks to supplement live sources
+	var allDocuments []types.Document
+	var archiveResult *archiverev.RetrieveResult
+	var archiveErr error
+
+	if w.config.ArchiveConfig.ArchiveStore != nil {
+		// Perform archive retrieval
+		archiveClient := archiverev.New(w.config.ArchiveConfig)
+		archiveResult, archiveErr = archiveClient.Retrieve(ctx, w.config.Topic, w.config.URLs)
+		if archiveErr != nil {
+			// Archive retrieval failure - warn but continue if we have live sources
+			// This is not a fail-fast error
+			fmt.Fprintf(os.Stderr, "Warning: archive retrieval failed: %v. Proceeding with live sources only.\n", archiveErr)
+			archiveResult = nil
+		}
+	}
+
+	// Combine live and archive documents
+	if archiveResult != nil && len(archiveResult.Documents) > 0 {
+		// Prepend archive documents to live documents
+		// This gives them prominence in the prompt
+		allDocuments = append(archiveResult.Documents, documents...)
+		fmt.Fprintf(os.Stderr, "Supplementing with %d archive document(s) from %d source(s).\n",
+			len(archiveResult.Documents), len(archiveResult.SourceIDs))
+	}
+	if archiveResult == nil || len(archiveResult.Documents) == 0 {
+		// No archive supplementation
+		allDocuments = documents
+	}
+
 	// Step: Generate dossier using the Researcher
 	// Build LLM client
 	llmBaseURL := w.config.LLMBaseURL
@@ -440,7 +477,7 @@ func (w *Workflow) continueFromFetches(ctx context.Context, explicitSuccesses []
 		}
 	}
 
-	dossier, err := r.Generate(ctx, w.config.Topic, documents)
+	dossier, err := r.Generate(ctx, w.config.Topic, allDocuments)
 	if err != nil {
 		return &ResearchFailure{
 			Type:    "researcher_error",
