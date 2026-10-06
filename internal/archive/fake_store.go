@@ -2,8 +2,11 @@ package archive
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"sort"
 	"sync"
+	"time"
 )
 
 // FakeStore is an in-memory implementation of Store for testing.
@@ -44,6 +47,7 @@ func NewFakeStore() *FakeStore {
 		chunks:            make(map[StableChunkID]*Chunk),
 		chunksByDocument:  make(map[StableDocumentID][]StableChunkID),
 		embeddingMetadata: make(map[StableChunkID]*EmbeddingMetadata),
+		embeddingVectors:  make(map[StableChunkID][]float32),
 		errors:            make(map[string]error),
 		documentNotFound:  false,
 		chunkNotFound:     false,
@@ -58,6 +62,7 @@ type FakeStore struct {
 	chunks            map[StableChunkID]*Chunk
 	chunksByDocument  map[StableDocumentID][]StableChunkID
 	embeddingMetadata map[StableChunkID]*EmbeddingMetadata
+	embeddingVectors  map[StableChunkID][]float32
 
 	// errors configures which operations to fail
 	errors map[string]error
@@ -614,4 +619,59 @@ func (e *CompiledError) Error() string {
 
 func (e *CompiledError) Unwrap() error {
 	return e.Err
+}
+
+// BeginTx implements Store.BeginTx.
+func (f *FakeStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	// Fake store doesn't support transactions, return an error
+	return nil, errors.New("BeginTx not supported by FakeStore")
+}
+
+// GetEmbeddingVector implements Store.GetEmbeddingVector.
+func (f *FakeStore) GetEmbeddingVector(ctx context.Context, chunkID StableChunkID) ([]float32, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Check if chunk exists
+	if _, exists := f.chunks[chunkID]; !exists {
+		return nil, ChunkNotFoundError{StableID: chunkID}
+	}
+
+	// Return the stored vector or nil if not set
+	if vec, ok := f.embeddingVectors[chunkID]; ok {
+		return vec, nil
+	}
+	return nil, nil
+}
+
+// SetEmbeddingVector implements Store.SetEmbeddingVector.
+func (f *FakeStore) SetEmbeddingVector(ctx context.Context, chunkID StableChunkID, vector []float32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Check if chunk exists
+	if _, exists := f.chunks[chunkID]; !exists {
+		return ChunkNotFoundError{StableID: chunkID}
+	}
+
+	// Store the vector
+	// Make a copy to prevent external modification
+	vecCopy := make([]float32, len(vector))
+	copy(vecCopy, vector)
+	f.embeddingVectors[chunkID] = vecCopy
+
+	// Also update metadata if it exists
+	if f.embeddingMetadata == nil {
+		f.embeddingMetadata = make(map[StableChunkID]*EmbeddingMetadata)
+	}
+	if meta, ok := f.embeddingMetadata[chunkID]; ok {
+		meta.Dimensions = EmbeddingDimensions(len(vector))
+	} else {
+		f.embeddingMetadata[chunkID] = &EmbeddingMetadata{
+			Dimensions:  EmbeddingDimensions(len(vector)),
+			GeneratedAt: time.Now(),
+		}
+	}
+
+	return nil
 }

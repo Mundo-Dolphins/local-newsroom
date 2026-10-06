@@ -24,8 +24,10 @@ package embedding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"sync"
 )
 
 // Embedder is the interface for generating embeddings from text.
@@ -218,3 +220,146 @@ func IsInternal(err error) bool {
 	}
 	return false
 }
+
+// FakeEmbedder is a fake Embedder implementation for testing.
+//
+// It provides deterministic behavior suitable for unit tests and supports:
+//   - Pre-configured embeddings for specific inputs
+//   - Configurable vector dimensions
+//   - Error injection
+//
+// Example usage:
+//
+//	fake := embedding.NewFakeEmbedder()
+//	fake.SetEmbedding("hello", []float32{0.1, 0.2, 0.3})
+//	fake.SetEmbedding("world", []float32{0.3, 0.2, 0.1})
+//	embeddings, err := fake.Embed(ctx, embedding.Request{
+//		Inputs: []string{"hello", "world"},
+//	})
+//	// Returns deterministic embeddings based on pre-configured values
+//
+//	// Or generate random embeddings with a fixed seed
+//	fake.SetDefaultDimension(128)
+//	embeddings, err := fake.Embed(ctx, embedding.Request{
+//		Inputs: []string{"test", "input"},
+//	})
+//	// Returns random but reproducible embeddings
+type FakeEmbedder struct {
+	mu         sync.Mutex
+	embeddings map[string][]float32
+	dimension  int
+	error      error
+}
+
+// NewFakeEmbedder creates a new FakeEmbedder.
+func NewFakeEmbedder() *FakeEmbedder {
+	return &FakeEmbedder{
+		embeddings: make(map[string][]float32),
+		dimension:  128,
+	}
+}
+
+// Embed implements Embedder.Embed for FakeEmbedder.
+func (f *FakeEmbedder) Embed(ctx context.Context, req Request) ([]Embedding, error) {
+	// Check for configured error
+	f.mu.Lock()
+	if f.error != nil {
+		err := f.error
+		f.mu.Unlock()
+		return nil, err
+	}
+	f.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ContextCanceled("embedding canceled: " + ctx.Err().Error())
+	default:
+	}
+
+	if len(req.Inputs) == 0 {
+		return nil, InvalidResponse("empty inputs")
+	}
+
+	embeddings := make([]Embedding, len(req.Inputs))
+	for i, input := range req.Inputs {
+		// Check for pre-configured embedding
+		f.mu.Lock()
+		vector, exists := f.embeddings[input]
+		f.mu.Unlock()
+
+		if !exists {
+			// Generate deterministic embedding based on input hash
+			vector = make([]float32, f.dimension)
+			hash := hashString(input)
+			for j := range vector {
+				vector[j] = float32((int64(hash)+int64(j))&0x7FFFFFFF) / 0x7FFFFFFF
+			}
+		}
+
+		// Validate vector
+		if err := ValidateVector(vector, i); err != nil {
+			return nil, InvalidResponse(err.Error())
+		}
+
+		embeddings[i] = Embedding{
+			Index:     i,
+			Vector:    vector,
+			ModelUsed: req.Model,
+		}
+	}
+
+	// Validate batch
+	if err := ValidateBatch(embeddings); err != nil {
+		return nil, InvalidResponse(err.Error())
+	}
+
+	return embeddings, nil
+}
+
+// SetEmbedding configures a specific input to return a specific embedding.
+func (f *FakeEmbedder) SetEmbedding(input string, vector []float32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.embeddings[input] = vector
+}
+
+// SetDefaultDimension sets the dimension for auto-generated embeddings.
+func (f *FakeEmbedder) SetDefaultDimension(dim int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dimension = dim
+}
+
+// SetError configures the FakeEmbedder to return an error.
+func (f *FakeEmbedder) SetError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.error = err
+}
+
+// ClearError clears any configured error.
+func (f *FakeEmbedder) ClearError() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.error = nil
+}
+
+// ClearEmbeddings removes all pre-configured embeddings.
+func (f *FakeEmbedder) ClearEmbeddings() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.embeddings = make(map[string][]float32)
+}
+
+// hashString computes a simple hash of a string.
+func hashString(s string) int64 {
+	var h int64
+	for _, c := range s {
+		h = h*31 + int64(c)
+	}
+	return h
+}
+
+// ErrDefault is returned when a default error is used.
+var ErrDefault = errors.New("default error")
