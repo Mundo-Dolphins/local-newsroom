@@ -316,6 +316,17 @@ func (v *VerificationResult) GetUncertainClaims() []string {
 	return result
 }
 
+// GetInsufficientEvidenceClaims returns claims that have been verified as insufficient_evidence.
+func (v *VerificationResult) GetInsufficientEvidenceClaims() []string {
+	var result []string
+	for claimID, status := range v.VerificationStatuses {
+		if status == VerificationStatusInsufficientEvidence {
+			result = append(result, claimID)
+		}
+	}
+	return result
+}
+
 // CalculateQualityScore computes a quality score (0-100) based on verification results.
 // Score weights:
 //   - Supported claims: +20 points each (max 60)
