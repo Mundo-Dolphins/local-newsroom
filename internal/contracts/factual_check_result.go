@@ -99,6 +99,10 @@ type UnsupportedStatement struct {
 
 	// SuggestedRevision provides suggested revision.
 	SuggestedRevision string `json:"suggested_revision,omitempty"`
+
+	// ClaimIDs are claim IDs that this statement might relate to.
+	// This enables traceability when checking for unsupported statements.
+	ClaimIDs []string `json:"claim_ids,omitempty"`
 }
 
 // StatementLocation indicates where a statement was found.
@@ -357,20 +361,6 @@ const (
 	RecommendationEffortSignificant RecommendationEffort = "significant"
 )
 
-// ConfidenceLevel indicates the confidence in the factual check result.
-type ConfidenceLevel string
-
-const (
-	// ConfidenceHigh indicates high confidence in the assessment.
-	ConfidenceHigh ConfidenceLevel = "high"
-
-	// ConfidenceMedium indicates medium confidence in the assessment.
-	ConfidenceMedium ConfidenceLevel = "medium"
-
-	// ConfidenceLow indicates low confidence in the assessment.
-	ConfidenceLow ConfidenceLevel = "low"
-)
-
 // Validate performs structural validation on FactualCheckResult.
 func (f *FactualCheckResult) Validate() error {
 	var errs []error
@@ -492,9 +482,19 @@ func (f *FactualCheckResult) Validate() error {
 
 // GetUnsupportedClaimIDs returns claim IDs associated with unsupported statements.
 func (f *FactualCheckResult) GetUnsupportedClaimIDs() []string {
-	// This would need claim IDs in UnsupportedStatement to be accurate
-	// For now, returns empty - implement claim ID tracking in statement
-	return []string{}
+	seen := make(map[string]bool)
+	var ids []string
+
+	for _, stmt := range f.UnsupportedStatements {
+		for _, claimID := range stmt.ClaimIDs {
+			if !seen[claimID] {
+				seen[claimID] = true
+				ids = append(ids, claimID)
+			}
+		}
+	}
+
+	return ids
 }
 
 // GetCriticalIssues returns all critical-severity issues.

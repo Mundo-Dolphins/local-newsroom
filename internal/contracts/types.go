@@ -144,3 +144,29 @@ func EqualStringSlices(a, b []string) bool {
 	}
 	return true
 }
+
+// ConfidenceLevel indicates confidence in verification or factual checking.
+// This type is used across all contracts to ensure consistency.
+type ConfidenceLevel string
+
+const (
+	// ConfidenceHigh indicates strong confidence in the assessment.
+	ConfidenceHigh ConfidenceLevel = "high"
+
+	// ConfidenceMedium indicates moderate confidence in the assessment.
+	ConfidenceMedium ConfidenceLevel = "medium"
+
+	// ConfidenceLow indicates low confidence in the assessment.
+	ConfidenceLow ConfidenceLevel = "low"
+)
+
+// IsSatisfied returns true if the confidence level meets or exceeds the threshold.
+func (c ConfidenceLevel) IsSatisfied(threshold ConfidenceLevel) bool {
+	order := map[ConfidenceLevel]int{ConfidenceLow: 0, ConfidenceMedium: 1, ConfidenceHigh: 2}
+	return order[c] >= order[threshold]
+}
+
+// String returns the string representation of the confidence level.
+func (c ConfidenceLevel) String() string {
+	return string(c)
+}

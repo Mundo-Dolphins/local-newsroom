@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +37,7 @@ func TestVerificationResult_ValidStruct(t *testing.T) {
 				ClaimID:            "claim-001",
 				Statement:          "Fact A",
 				VerificationStatus: VerificationStatusSupported,
-				ConfidenceLevel:    researcher.ConfidenceHigh,
+				ConfidenceLevel:    ConfidenceHigh,
 				SupportingEvidence: []EvidenceReference{
 					{
 						SourceID:        "source-001",
@@ -52,7 +51,7 @@ func TestVerificationResult_ValidStruct(t *testing.T) {
 				ClaimID:            "claim-002",
 				Statement:          "Fact B",
 				VerificationStatus: VerificationStatusContradicted,
-				ConfidenceLevel:    researcher.ConfidenceMedium,
+				ConfidenceLevel:    ConfidenceMedium,
 				ConflictingEvidence: []EvidenceReference{
 					{
 						SourceID:        "source-002",
@@ -259,7 +258,7 @@ func TestVerificationResult_JSONSerialization(t *testing.T) {
 				ClaimID:            "claim-001",
 				Statement:          "Fact A",
 				VerificationStatus: VerificationStatusSupported,
-				ConfidenceLevel:    researcher.ConfidenceHigh,
+				ConfidenceLevel:    ConfidenceHigh,
 			},
 		},
 		QualityScore: 75.0,
@@ -1266,11 +1265,11 @@ func TestContractProvenanceChain(t *testing.T) {
 	claims := []struct {
 		ID         string
 		Statement  string
-		Confidence researcher.ConfidenceLevel
+		Confidence ConfidenceLevel
 	}{
-		{ID: "claim-001", Statement: "The program processed 150 records", Confidence: researcher.ConfidenceHigh},
-		{ID: "claim-002", Statement: "The latency averaged 23ms", Confidence: researcher.ConfidenceMedium},
-		{ID: "claim-003", Statement: "Users reported satisfaction", Confidence: researcher.ConfidenceLow},
+		{ID: "claim-001", Statement: "The program processed 150 records", Confidence: ConfidenceHigh},
+		{ID: "claim-002", Statement: "The latency averaged 23ms", Confidence: ConfidenceMedium},
+		{ID: "claim-003", Statement: "Users reported satisfaction", Confidence: ConfidenceLow},
 	}
 
 	// Step 2: VerificationResult
@@ -1440,4 +1439,311 @@ func TestUUIDGenerator(t *testing.T) {
 	assert.NotEqual(t, id1, id2)
 	assert.NotEqual(t, id1, id3)
 	assert.NotEqual(t, id2, id3)
+}
+
+// ============================================================================
+// Additional Coverage Tests (Methods with 0% coverage)
+// ============================================================================
+
+func TestEditorialArtifact_HasUnverifiedClaims(t *testing.T) {
+	// Test case 1: Has unverified claims
+	artifact := &EditorialArtifact{
+		StableID:     "artifact-001",
+		ArtifactType: ArtifactTypeThread,
+		Posts:        []Post{{Order: 0, Body: "Post"}},
+		ClaimReferences: map[string]ClaimUsage{
+			"claim-001": {ClaimID: "claim-001", UsageType: ClaimUsageCore, Paraphrased: true, UsageContext: ""},
+		},
+	}
+	assert.True(t, artifact.HasUnverifiedClaims())
+
+	// Test case 2: No unverified claims (proper usage)
+	artifact2 := &EditorialArtifact{
+		StableID:     "artifact-002",
+		ArtifactType: ArtifactTypeThread,
+		Posts:        []Post{{Order: 0, Body: "Post"}},
+		ClaimReferences: map[string]ClaimUsage{
+			"claim-001": {ClaimID: "claim-001", UsageType: ClaimUsageCore, Paraphrased: true, UsageContext: "Some context"},
+		},
+	}
+	assert.False(t, artifact2.HasUnverifiedClaims())
+
+	// Test case 3: Empty claim references
+	artifact3 := &EditorialArtifact{
+		StableID:        "artifact-003",
+		ArtifactType:    ArtifactTypeThread,
+		Posts:           []Post{{Order: 0, Body: "Post"}},
+		ClaimReferences: map[string]ClaimUsage{},
+	}
+	assert.False(t, artifact3.HasUnverifiedClaims())
+}
+
+func TestEditorialArtifact_ValidateSectionOrder(t *testing.T) {
+	// Test case 1: Valid ordering
+	artifact := &EditorialArtifact{
+		StableID:     "artifact-001",
+		ArtifactType: ArtifactTypeArticle,
+		Sections: []Section{
+			{Order: 0, Title: "Section 1"},
+			{Order: 1, Title: "Section 2"},
+			{Order: 2, Title: "Section 3"},
+		},
+	}
+	assert.NoError(t, artifact.ValidateSectionOrder())
+
+	// Test case 2: Invalid ordering (non-ascending)
+	artifact2 := &EditorialArtifact{
+		StableID:     "artifact-002",
+		ArtifactType: ArtifactTypeArticle,
+		Sections: []Section{
+			{Order: 0, Title: "Section 1"},
+			{Order: 0, Title: "Section 2"}, // duplicate order
+		},
+	}
+	err := artifact2.ValidateSectionOrder()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not in ascending order")
+
+	// Test case 3: Invalid ordering (descending)
+	artifact3 := &EditorialArtifact{
+		StableID:     "artifact-003",
+		ArtifactType: ArtifactTypeArticle,
+		Sections: []Section{
+			{Order: 2, Title: "Section 1"},
+			{Order: 1, Title: "Section 2"},
+			{Order: 0, Title: "Section 3"},
+		},
+	}
+	err = artifact3.ValidateSectionOrder()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not in ascending order")
+}
+
+func TestEditorialArtifact_ValidatePostOrder(t *testing.T) {
+	// Test case 1: Valid ordering
+	artifact := &EditorialArtifact{
+		StableID:     "artifact-001",
+		ArtifactType: ArtifactTypeThread,
+		Posts: []Post{
+			{Order: 0, Body: "Post 1"},
+			{Order: 1, Body: "Post 2"},
+			{Order: 2, Body: "Post 3"},
+		},
+	}
+	assert.NoError(t, artifact.ValidatePostOrder())
+
+	// Test case 2: Invalid ordering (duplicate)
+	artifact2 := &EditorialArtifact{
+		StableID:     "artifact-002",
+		ArtifactType: ArtifactTypeThread,
+		Posts: []Post{
+			{Order: 0, Body: "Post 1"},
+			{Order: 0, Body: "Post 2"}, // duplicate order
+		},
+	}
+	err := artifact2.ValidatePostOrder()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not in ascending order")
+}
+
+func TestEditorialArtifact_GetAllClaimIDs(t *testing.T) {
+	artifact := &EditorialArtifact{
+		StableID:     "artifact-001",
+		ArtifactType: ArtifactTypeHybrid,
+		Sections: []Section{
+			{Order: 0, Title: "Section 1", ClaimIDs: []string{"claim-001", "claim-002"}},
+			{Order: 1, Title: "Section 2", ClaimIDs: []string{"claim-002", "claim-003"}},
+		},
+		Posts: []Post{
+			{Order: 0, Body: "Post 1", ClaimIDs: []string{"claim-003", "claim-004"}},
+			{Order: 1, Body: "Post 2", ClaimIDs: []string{"claim-004"}},
+		},
+	}
+
+	ids := artifact.GetAllClaimIDs()
+	assert.Len(t, ids, 4)
+	assert.Contains(t, ids, "claim-001")
+	assert.Contains(t, ids, "claim-002")
+	assert.Contains(t, ids, "claim-003")
+	assert.Contains(t, ids, "claim-004")
+}
+
+func TestEditorialArtifact_ValidateClaimReferences(t *testing.T) {
+	// Test case 1: Valid references
+	artifact := &EditorialArtifact{
+		StableID:     "artifact-001",
+		ArtifactType: ArtifactTypeArticle,
+		Sections: []Section{
+			{Order: 0, Title: "Section 1", ClaimIDs: []string{"claim-001", "claim-002"}},
+		},
+		ClaimReferences: map[string]ClaimUsage{
+			"claim-001": {ClaimID: "claim-001"},
+			"claim-002": {ClaimID: "claim-002"},
+		},
+	}
+	assert.NoError(t, artifact.ValidateClaimReferences())
+
+	// Test case 2: ClaimReference without corresponding ClaimIDs
+	artifact2 := &EditorialArtifact{
+		StableID:     "artifact-002",
+		ArtifactType: ArtifactTypeArticle,
+		Sections: []Section{
+			{Order: 0, Title: "Section 1", ClaimIDs: []string{"claim-001"}},
+		},
+		ClaimReferences: map[string]ClaimUsage{
+			"claim-001": {ClaimID: "claim-001"},
+			"claim-002": {ClaimID: "claim-002"}, // no matching ClaimIDs
+		},
+	}
+	err := artifact2.ValidateClaimReferences()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "claim_reference \"claim-002\" exists but claim ID not found")
+}
+
+func TestMustTimeToUTC(t *testing.T) {
+	// Test case 1: Local time converted to UTC
+	t1 := time.Date(2024, 1, 15, 14, 30, 0, 0, time.Local)
+	result1 := MustTimeToUTC(t1)
+	assert.Equal(t, time.UTC, result1.Location())
+
+	// Test case 2: Already UTC
+	t2 := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	result2 := MustTimeToUTC(t2)
+	assert.Equal(t, time.UTC, result2.Location())
+}
+
+func TestAssertValid(t *testing.T) {
+	// Test case 1: Valid time
+	assert.True(t, AssertValid(time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)))
+
+	// Test case 2: Zero time is invalid
+	assert.False(t, AssertValid(time.Time{}))
+}
+
+func TestConfidenceLevel_IsSatisfied(t *testing.T) {
+	// Test case 1: High satisfies high
+	assert.True(t, ConfidenceHigh.IsSatisfied(ConfidenceHigh))
+
+	// Test case 2: High satisfies medium
+	assert.True(t, ConfidenceHigh.IsSatisfied(ConfidenceMedium))
+
+	// Test case 3: High satisfies low
+	assert.True(t, ConfidenceHigh.IsSatisfied(ConfidenceLow))
+
+	// Test case 4: Medium satisfies medium
+	assert.True(t, ConfidenceMedium.IsSatisfied(ConfidenceMedium))
+
+	// Test case 5: Medium satisfies low
+	assert.True(t, ConfidenceMedium.IsSatisfied(ConfidenceLow))
+
+	// Test case 6: Medium does not satisfy high
+	assert.False(t, ConfidenceMedium.IsSatisfied(ConfidenceHigh))
+
+	// Test case 7: Low satisfies low
+	assert.True(t, ConfidenceLow.IsSatisfied(ConfidenceLow))
+
+	// Test case 8: Low does not satisfy medium
+	assert.False(t, ConfidenceLow.IsSatisfied(ConfidenceMedium))
+
+	// Test case 9: Low does not satisfy high
+	assert.False(t, ConfidenceLow.IsSatisfied(ConfidenceHigh))
+}
+
+func TestConfidenceLevel_String(t *testing.T) {
+	assert.Equal(t, "high", ConfidenceHigh.String())
+	assert.Equal(t, "medium", ConfidenceMedium.String())
+	assert.Equal(t, "low", ConfidenceLow.String())
+}
+
+func TestFactualCheckResult_GetUnsupportedClaimIDs(t *testing.T) {
+	result := &FactualCheckResult{
+		StableID:        "check-001",
+		InputArtifactID: "artifact-001",
+		CheckedAt:       parseTime(testBaseTime),
+		ClaimIDs:        []string{"claim-001", "claim-002", "claim-003"},
+		ClaimVerificationStatus: map[string]VerificationStatus{
+			"claim-001": VerificationStatusSupported,
+			"claim-002": VerificationStatusSupported,
+			"claim-003": VerificationStatusSupported,
+		},
+		OverallStatus:   FactualCheckStatusPass,
+		ConfidenceLevel: ConfidenceHigh,
+		UnsupportedStatements: []UnsupportedStatement{
+			{
+				Statement:     "Unverified claim A",
+				StatementType: UnsupportedStatementNewFacts,
+				ClaimIDs:      []string{"claim-001"},
+			},
+			{
+				Statement:     "Unverified claim B",
+				StatementType: UnsupportedStatementInference,
+				ClaimIDs:      []string{"claim-002"},
+			},
+			{
+				Statement:     "Unverified claim C",
+				StatementType: UnsupportedStatementAssumption,
+				ClaimIDs:      []string{"claim-001", "claim-003"}, // duplicate claim-001
+			},
+		},
+	}
+
+	ids := result.GetUnsupportedClaimIDs()
+	assert.Len(t, ids, 3)
+	assert.Contains(t, ids, "claim-001")
+	assert.Contains(t, ids, "claim-002")
+	assert.Contains(t, ids, "claim-003")
+}
+
+// ============================================================================
+// Coverage Edge Cases
+
+// ============================================================================
+// Coverage Edge Cases
+// ============================================================================
+
+func TestEditorialArtifact_HasCriticalWarnings_Nil(t *testing.T) {
+	// Test with nil warnings slice
+	artifact := &EditorialArtifact{
+		StableID:           "artifact-001",
+		ArtifactType:       ArtifactTypeThread,
+		Posts:              []Post{{Order: 0, Body: "Post"}},
+		ClaimReferences:    map[string]ClaimUsage{},
+		GenerationMetadata: GenerationMetadata{GeneratedAt: parseTime(testBaseTime)},
+		Warnings:           nil,
+	}
+	assert.False(t, artifact.HasCriticalWarnings())
+}
+
+func TestFactualCheckResult_InvalidConfidence(t *testing.T) {
+	// Test edge case where status is neither high, medium, nor low
+	result := &FactualCheckResult{
+		StableID:                "check-001",
+		InputArtifactID:         "artifact-001",
+		CheckedAt:               parseTime(testBaseTime),
+		ClaimIDs:                []string{"claim-001"},
+		ClaimVerificationStatus: map[string]VerificationStatus{"claim-001": VerificationStatusSupported},
+		OverallStatus:           FactualCheckStatusPass,
+		ConfidenceLevel:         ConfidenceLevel("invalid"),
+	}
+	err := result.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid confidence_level")
+}
+
+func TestEditorialArtifact_DuplicateWarnings(t *testing.T) {
+	// Test validation failure with duplicate warning types
+	artifact := &EditorialArtifact{
+		StableID:           "artifact-001",
+		ArtifactType:       ArtifactTypeThread,
+		Posts:              []Post{{Order: 0, Body: "Post"}},
+		ClaimReferences:    map[string]ClaimUsage{},
+		GenerationMetadata: GenerationMetadata{GeneratedAt: parseTime(testBaseTime)},
+		Warnings: []Warning{
+			{WarningType: WarningTypeUnverifiedClaim, Severity: WarningSeverityLow, Message: "test"},
+			{WarningType: WarningTypeUnverifiedClaim, Severity: WarningSeverityMedium, Message: "test2"},
+		},
+	}
+	err := artifact.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate warning type")
 }

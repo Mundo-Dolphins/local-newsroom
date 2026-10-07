@@ -187,7 +187,7 @@ type ClaimVerificationDetails struct {
 	VerificationStatus VerificationStatus `json:"verification_status"`
 
 	// ConfidenceLevel indicates the verifier's confidence in the assessment.
-	ConfidenceLevel researcher.ConfidenceLevel `json:"confidence_level,omitempty"`
+	ConfidenceLevel ConfidenceLevel `json:"confidence_level,omitempty"`
 
 	// SupportingEvidence lists source IDs and excerpts that support the claim.
 	SupportingEvidence []EvidenceReference `json:"supporting_evidence,omitempty"`
