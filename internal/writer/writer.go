@@ -35,6 +35,7 @@ import (
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 )
 
 // Writer produces an EditorialArtifact from a VerificationResult.
@@ -79,6 +80,10 @@ type WriterConfig struct {
 	// PromptOverride allows customizing the system prompt for testing or special cases.
 	// If empty, uses the writer.prompt file from prompts/writer.prompt.
 	PromptOverride string
+
+	// ProfileInjector provides profile-based instructions for style, facts, vocabulary.
+	// If nil, profile instructions must be passed via profileInstructions parameter.
+	ProfileInjector profiles.Injector
 
 	// TimeNow is used to get the current time for generated_at timestamps.
 	// For testing, this can be overridden to return a fixed time.
@@ -133,24 +138,28 @@ func New(client llm.Client, model string, config WriterConfig) (*Writer, error) 
 	}, nil
 }
 
-// Generate produces a validated EditorialArtifact from a VerificationResult and profile instructions.
+// Generate produces a validated EditorialArtifact from a VerificationResult.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeouts
 //   - verificationResult: The VerificationResult containing verified claims
-//   - profileInstructions: Map of profile/injection keys (language, tone, format, etc.)
+//   - overrideProfileInstructions: Optional overrides for profile instructions.
+//     Can be nil if ProfileInjector is configured.
 //
 // Returns:
 //   - *contracts.EditorialArtifact: The validated artifact
 //   - error: If generation or validation fails
 //
 // The Writer will:
-//  1. Build a prompt with verification results and profile instructions
+//  1. Build a prompt with verification results and profile instructions (from injector or overrides)
 //  2. Send the prompt to the LLM client
 //  3. Parse and validate the JSON response
 //  4. Validate the artifact structure and claim references
 //  5. Return the validated artifact
-func (w *Writer) Generate(ctx context.Context, verificationResult *contracts.VerificationResult, profileInstructions map[string]string) (*contracts.EditorialArtifact, error) {
+//
+// ProfileInjector takes precedence: if configured, it provides the full profile instructions.
+// overrideProfileInstructions is only used if ProfileInjector is nil (backwards compatibility).
+func (w *Writer) Generate(ctx context.Context, verificationResult *contracts.VerificationResult, overrideProfileInstructions map[string]string) (*contracts.EditorialArtifact, error) {
 	if verificationResult == nil {
 		return nil, errors.New("verificationResult cannot be nil")
 	}
@@ -159,8 +168,16 @@ func (w *Writer) Generate(ctx context.Context, verificationResult *contracts.Ver
 		return nil, fmt.Errorf("invalid verification result: %w", err)
 	}
 
-	// Validate profile instructions
-	if profileInstructions == nil {
+	// Determine which profile instructions to use
+	var profileInstructions map[string]string
+
+	if w.config.ProfileInjector != nil {
+		// Use profile injector for full profile-based instructions
+		profileInstructions = extractProfileInstructionsFromInjector(w.config.ProfileInjector)
+	} else if overrideProfileInstructions != nil {
+		// Backwards compatibility: use provided map
+		profileInstructions = overrideProfileInstructions
+	} else {
 		profileInstructions = make(map[string]string)
 	}
 
@@ -476,4 +493,38 @@ func validateClaimID(claimID string) bool {
 // ValidateClaimID verifies that a claim ID is in valid format.
 func ValidateClaimID(claimID string) bool {
 	return validateClaimID(claimID)
+}
+
+// extractProfileInstructionsFromExtractor converts a profile injector into the
+// map[string]string format expected by buildUserPrompt.
+//
+// This provides backwards compatibility with code that uses raw profile maps.
+func extractProfileInstructionsFromInjector(inj profiles.Injector) map[string]string {
+	profile := inj.GetProfile()
+	if profile.Style == "" && profile.Vocabulary == "" && profile.OutputFormat == "" {
+		return nil
+	}
+
+	instructions := make(map[string]string)
+
+	if profile.Style != "" {
+		instructions["style"] = profile.Style
+	}
+	if profile.Vocabulary != "" {
+		instructions["vocabulary"] = profile.Vocabulary
+	}
+	if profile.OutputFormat != "" {
+		instructions["output_format"] = profile.OutputFormat
+	}
+
+	// Include any examples in the instructions
+	if len(profile.Examples) > 0 {
+		var examplesStr strings.Builder
+		for path, content := range profile.Examples {
+			fmt.Fprintf(&examplesStr, "### %s\n\n```\n%s\n\n```\n", path, content)
+		}
+		instructions["examples"] = examplesStr.String()
+	}
+
+	return instructions
 }
