@@ -201,10 +201,10 @@ The system enforces budgets at multiple stages:
 
 The project includes comprehensive end-to-end verification with **deterministic offline tests**:
 
-- **20 E2E tests** covering all research scenarios
+- **20+ E2E tests** covering all research and writing scenarios (v0.3)
+- **11 v0.4 pipeline tests** for complete offline E2E coverage
 - **Fake LLM and SearXNG servers** for deterministic, reproducible testing
 - **No external network access** - tests are fully offline and deterministic
-- **Coverage maintained at ≥80%** across all packages
 
 Test scenarios include:
 - Successful topic-only research
@@ -217,13 +217,37 @@ Test scenarios include:
 - Concurrent fetch operations
 - Determinism verification
 
+### v0.4 E2E Pipeline (Offline Testing)
+
+v0.4 introduces a complete offline end-to-end editorial pipeline with deterministic
+fake LLMs for full testing without external dependencies:
+
+**Pipeline Stages**:
+```
+ResearchDossier → Fake Verifier LLM → VerificationResult → 
+Optional Follow-Up → Fake Writer LLM → EditorialArtifact → 
+Final Checker → Renderer → article.md / Bluesky thread
+```
+
+**Key Features**:
+- Fully offline E2E testing with fake deterministic LLMs
+- No oMLX, SearXNG, or real web access required for tests
+- Bluesky 300-character post invariant enforced
+- Profile inheritance model for style/tone configuration
+- Intermediate artifact round-trip preservation
+- v0.3 RAG and research functionality unchanged
+
+**Documentation**: See `docs/v04-editorial-pipeline.md` for complete architecture.
+
 ### Limitations
 
 - **SearXNG required** for automatic discovery (URL-only mode works without it)
 - **External LLM required** for planning and research (not supported for local inference)
-- **Test constraints**: E2E tests use fake servers; real integration requires live
+- **Test constraints**: v0.4 E2E tests use fake servers; real integration requires live
   SearXNG and LLM endpoints
-- **v0.2 only**: RAG and Writer functionality from v0.3 are not implemented
+- **No automatic publication**: v0.4 saves artifacts as files only; no Hugo or Bluesky
+  publishing automation (v0.5+)
+- **Offline-first**: v0.4 tests use fake LLMs; real LLM integration requires v0.5+
 
 Automatic discovery has built-in limits to prevent excessive resource usage:
 
