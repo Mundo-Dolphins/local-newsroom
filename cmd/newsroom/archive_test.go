@@ -229,13 +229,14 @@ func TestOutputFormats(t *testing.T) {
 	// Verify format validation
 	validFormats := []string{"text", "json"}
 	for _, format := range validFormats {
-		if !isValidFormat(format) {
+		if !isValidArchiveFormat(format) {
 			t.Errorf("valid format %s rejected", format)
 		}
 	}
 }
 
-func isValidFormat(format string) bool {
+// isValidArchiveFormat is specific to archive command formats (text, json)
+func isValidArchiveFormat(format string) bool {
 	return format == "text" || format == "json"
 }
 
