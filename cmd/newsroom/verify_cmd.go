@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/verifier"
@@ -161,13 +162,34 @@ func doVerify(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Set up LLM client
-	llmClient := buildLLMClientFromFlags(vFlags.llmBaseURL, vFlags.llmModel, vFlags.llmAPIKey, vFlags.llmTimeout)
+	// Set up LLM client via the full precedence chain
+	// (CLI flags > environment variables > config file > built-in defaults).
+	llmClient, err := buildLLMClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the verifier's generation parameters (CLI > env > config file
+	// > stage built-in defaults 0.3 / 50000).
+	temperature, tempSet, err := appConfig.GetFloat(config.SettingTemperature, flagOverride(cmd, "temperature"))
+	if err != nil {
+		return err
+	}
+	if !tempSet {
+		temperature = 0.3
+	}
+	maxTokens, tokensSet, err := appConfig.GetInt(config.SettingMaxTokens, flagOverride(cmd, "max-tokens"))
+	if err != nil {
+		return err
+	}
+	if !tokensSet {
+		maxTokens = 50000
+	}
 
 	// Build verifier config
 	verifierConfig := verifier.VerifierConfig{
-		Temperature:     0.3,
-		MaxOutputTokens: 50000,
+		Temperature:     temperature,
+		MaxOutputTokens: maxTokens,
 	}
 
 	// Create verifier

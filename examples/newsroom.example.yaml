@@ -1,0 +1,119 @@
+# newsroom.example.yaml
+#
+# Example configuration file for the newsroom CLI (v0.5+).
+#
+# Copy this file to one of the standard locations and edit it:
+#   ~/.newsroom.yaml
+#   $XDG_CONFIG_HOME/newsroom.yaml
+#   ./newsroom.yaml
+# or pass an explicit path:
+#   newsroom --config /path/to/config.yaml write --dossier verification.json
+#
+# Precedence (highest wins):
+#   1. CLI flags            (e.g. --format json)
+#   2. Environment variables (e.g. OMLX_BASE_URL)
+#   3. Config file          (this file)
+#   4. Built-in defaults
+#
+# Any section, subsection, or field may be omitted; the resolution falls
+# through to the next layer. Secrets (api_key) are NEVER written in the file
+# as literal values — they reference an environment variable that holds the
+# credential, e.g. api_key: {env: OMLX_API_KEY}.
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# LLM: model used for writing, verification, final checks, and (in research)
+# discovery/scoring. Replaces OMLX_* environment variables.
+# ---------------------------------------------------------------------------
+llm:
+  # Base URL of an OpenAI-compatible /chat/completions endpoint.
+  # Example (a local model server on the same machine):
+  #   base_url: http://localhost:11434/v1
+  # Example (a remote server reached from a client laptop):
+  #   base_url: http://192.168.1.50:11434/v1   # use the host's IP/hostname
+  base_url: http://localhost:11434/v1
+  model: llama3.1:70b
+  # The credential is only referenced, never stored here.
+  api_key:
+    env: OMLX_API_KEY
+  # Request timeout in seconds (default 120).
+  timeout: 120
+
+# ---------------------------------------------------------------------------
+# Search: web discovery via a SearXNG instance (research pipeline).
+# ---------------------------------------------------------------------------
+search:
+  # SearXNG server base URL, e.g. http://localhost:8080 or
+  # http://search-host:8080 for a remote instance.
+  base_url: http://localhost:8080
+  language: en
+  time_range: month      # day | week | month | year
+  max_queries: 5         # discovery queries per topic
+  results_per_query: 10  # results per query
+  max_sources: 20        # total sources fetched
+  # Optional API credentials for a credentialed SearXNG deployment.
+  api_key:
+    env: SEARXNG_API_KEY
+  api_header: X-Api-Key
+
+# ---------------------------------------------------------------------------
+# Embedding: model used for archive search (vector similarity).
+# ---------------------------------------------------------------------------
+embedding:
+  base_url: http://localhost:8000/v1
+  model: nomic-embed-text
+  api_key:
+    env: EMBEDDING_API_KEY
+  timeout: 60
+
+# ---------------------------------------------------------------------------
+# Rerank: optional reranking stage for archive search.
+# ---------------------------------------------------------------------------
+rerank:
+  enabled: false
+  # model: bge-reranker-v2-m3
+
+# ---------------------------------------------------------------------------
+# Archive: local SQLite store of archived documents.
+# ---------------------------------------------------------------------------
+archive:
+  db_path: ./archive.db
+  top_k: 5
+  format: text           # text | json (search & stats output)
+
+# ---------------------------------------------------------------------------
+# Fetch: web-page fetching limits.
+# ---------------------------------------------------------------------------
+fetch:
+  timeout: 30            # seconds
+  max_size: 5242880      # bytes
+  max_words: 10000       # words retained per page
+  parallel: 4            # concurrent fetches
+
+# ---------------------------------------------------------------------------
+# Chunk: archive chunking parameters.
+# ---------------------------------------------------------------------------
+chunk:
+  target_size: 800       # tokens
+  max_size: 1200         # tokens
+  overlap_ratio: 0.15    # 0..1
+
+# ---------------------------------------------------------------------------
+# Profiles: writing-style profile directory and default profile name.
+# ---------------------------------------------------------------------------
+profiles:
+  root: ./profiles
+  name: default
+
+# ---------------------------------------------------------------------------
+# Defaults: output preferences for write/final-check unless a flag is given.
+# Leave temperature/max_tokens unset to keep each stage's built-in values
+# (write: 0.3/20000, final-check: 0.1/5000, verify: 0.3/50000).
+# ---------------------------------------------------------------------------
+defaults:
+  language: en
+  output_format: article # article | social | summary
+  tone: neutral          # neutral | urgent | analytical
+  # temperature: 0.3
+  # max_tokens: 20000

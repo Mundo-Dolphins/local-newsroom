@@ -3,6 +3,74 @@
 Local-first AI newsroom for researching, verifying and writing content with
 local LLMs.
 
+## Configuration
+
+All commands share a single YAML configuration file (v0.5+). Set it up once
+and every command (research, write, verify, final-check, archive, ...) uses
+the same model endpoints and credentials:
+
+```bash
+cp examples/newsroom.example.yaml ~/.newsroom.yaml
+$EDITOR ~/.newsroom.yaml
+newsroom config validate   # check the file
+newsroom config show       # print the effective configuration
+```
+
+The CLI looks for the config file at (first match wins):
+
+1. `--config /path/to/file.yaml` flag on any command (explicit path)
+2. `~/.newsroom.yaml`
+3. `$XDG_CONFIG_HOME/newsroom.yaml`
+4. `./newsroom.yaml` (current directory)
+
+If none exists the CLI runs on environment variables and built-in defaults
+(see the per-command sections below) and prints a one-line notice.
+
+### Precedence
+
+For every setting, the first layer that provides a value wins:
+
+```
+CLI flag  >  environment variable  >  config file  >  built-in default
+```
+
+For example `--format json` beats `ARCHIVE_FORMAT=text`, which beats
+`archive.format` in the config file, which beats the built-in `text`.
+
+### Secrets
+
+API keys are **never stored in the config file**. Key fields only hold a
+reference to the environment variable that contains the credential:
+
+```yaml
+llm:
+  base_url: http://localhost:11434/v1
+  model: llama3.1:70b
+  api_key:
+    env: OMLX_API_KEY   # the key itself lives only in the environment
+```
+
+`newsroom config show` and run manifests always print `[REDACTED]` for secret
+values, even if the referenced variable is set. A config file containing a
+literal key value is rejected.
+
+### The `config` command
+
+```bash
+newsroom config show                 # human-readable table with per-value sources
+newsroom config show --format json   # machine-readable, secrets redacted
+newsroom config validate             # exit non-zero on unknown keys or out-of-range values
+```
+
+The table shows, for every setting, the resolved value and where it came
+from: a flag name, `env:NAME`, `config`, `default`, or `unset` (setting has
+no value in any layer; the command then applies its own stage-specific
+default, e.g. write temperature 0.3, final-check 0.1).
+
+A full annotated example covering every section (llm, search, embedding,
+rerank, archive, fetch, chunk, profiles, defaults) lives at
+[examples/newsroom.example.yaml](examples/newsroom.example.yaml).
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates

@@ -16,10 +16,18 @@ func printVersion(cmd *cobra.Command, args []string) error {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "newsroom",
-	Short:   "newsroom CLI",
-	Long:    `newsroom is the local-newsroom CLI. The pipeline stages are not implemented yet.`,
-	Version: "0.0.0",
+	Use:   "newsroom",
+	Short: "newsroom CLI",
+	Long: `newsroom is the local-newsroom CLI.
+
+It provides the v0.4 editorial pipeline stages (research, verify, write,
+final-check) and the local archive. Persistent configuration is supported
+via a YAML config file; every setting resolves with the precedence:
+
+  CLI flags > environment variables > config file > built-in defaults
+
+See 'newsroom config --help' for configuration management.`,
+	Version: "0.5.0",
 	RunE:    printVersion,
 }
 
@@ -31,21 +39,26 @@ var helpCmd = &cobra.Command{
 		fmt.Println(rootCmd.Long)
 		return nil
 	},
+	// Help must work even when the config file is missing or invalid, so
+	// break the persistent-pre-run inheritance from the root.
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
 }
-
-// Add more commands here as the internal packages get implemented:
-//
-//	var researchCmd = &cobra.Command{
-//	    Use:   "research",
-//	    Short: "research collected material",
-//	    RunE: doResearch,
-//	}
-//	rootCmd.AddCommand(researchCmd)
 
 func init() {
 	flags := pflag.NewFlagSet("newsroom", pflag.ExitOnError)
 	flags.BoolVar(&versionFlag, "version", false, "print the newsroom version and exit")
 	rootCmd.PersistentFlags().AddFlagSet(flags)
+	rootCmd.PersistentFlags().StringVar(&configPathFlag, "config", "",
+		"Path to the newsroom config file (default: $NEWSROOM_CONFIG, ./.newsroom.yaml, $XDG_CONFIG_HOME/newsroom/config.yaml, ~/.newsroom.yaml)")
+	// Resolve the persistent configuration (config file + environment +
+	// built-in defaults) before every command runs. Version printing and
+	// help bypass the load so they work even with a broken config file.
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if versionFlag {
+			return nil
+		}
+		return loadAppConfig()
+	}
 	rootCmd.AddCommand(helpCmd)
 }
 

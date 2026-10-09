@@ -19,6 +19,7 @@ import (
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/archive"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/chunker"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/embedding"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor"
 	html_extractor "github.com/Mundo-Dolphins/local-newsroom/internal/extractor/html"
@@ -203,6 +204,12 @@ func init() {
 
 // doArchiveAdd implements the "archive add" command.
 func doArchiveAdd(cmd *cobra.Command, args []string) error {
+	// Resolve archive settings (CLI > env > config file > built-in defaults)
+	// into the shared flag structs that the pipeline helpers read from.
+	if err := resolveArchiveSettings(cmd, true); err != nil {
+		return err
+	}
+
 	// Collect URLs from flags and file
 	urls := aaFlags.urls
 	if aaFlags.urlsFile != "" {
@@ -507,6 +514,11 @@ func embedChunksBatch(ctx context.Context, embedder embedding.Embedder, store *a
 
 // doArchiveSearch implements the "archive search" command.
 func doArchiveSearch(cmd *cobra.Command, args []string) error {
+	// Resolve archive settings (CLI > env > config file > built-in defaults).
+	if err := resolveArchiveSettings(cmd, false); err != nil {
+		return err
+	}
+
 	// Get query from flag or stdin
 	query := asFlags.query
 	if asFlags.fromStdin {
@@ -651,6 +663,11 @@ func outputSearchResultsJSON(result *retrieval.Result) error {
 
 // doArchiveStats implements the "archive stats" command.
 func doArchiveStats(cmd *cobra.Command, args []string) error {
+	// Resolve archive settings (CLI > env > config file > built-in defaults).
+	if err := resolveArchiveSettings(cmd, false); err != nil {
+		return err
+	}
+
 	store, err := archive.NewSQLiteStore(aFlags.dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to create archive store: %w", err)
@@ -736,6 +753,109 @@ func outputStatsJSON(stats ArchiveStats) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(stats)
+}
+
+// resolveArchiveSettings resolves the archive-related settings through the
+// full precedence chain (CLI flags > environment variables > config file >
+// built-in defaults) and materializes the winners into the shared flag
+// structs (aFlags, and aaFlags when includeAdd is set), which the pipeline
+// helpers below read from.
+func resolveArchiveSettings(cmd *cobra.Command, includeAdd bool) error {
+	dbPath, _, err := appConfig.GetString(config.SettingArchiveDBPath, flagOverride(cmd, "db-path"))
+	if err != nil {
+		return err
+	}
+	if dbPath == "" {
+		dbPath = "./archive.db"
+	}
+
+	embBaseURL, _, err := appConfig.GetString(config.SettingEmbeddingBaseURL, flagOverride(cmd, "embedding-base-url"))
+	if err != nil {
+		return err
+	}
+	embModel, _, err := appConfig.GetString(config.SettingEmbeddingModel, flagOverride(cmd, "embedding-model"))
+	if err != nil {
+		return err
+	}
+	embAPIKey, _, err := appConfig.GetString(config.SettingEmbeddingAPIKey, flagOverride(cmd, "embedding-api-key"))
+	if err != nil {
+		return err
+	}
+	embTimeout, _, err := appConfig.GetFloat(config.SettingEmbeddingTimeout, flagOverride(cmd, "embedding-timeout"))
+	if err != nil {
+		return err
+	}
+	topK, _, err := appConfig.GetInt(config.SettingArchiveTopK, flagOverride(cmd, "top-k"))
+	if err != nil {
+		return err
+	}
+	rerankEnabled, _, err := appConfig.GetBool(config.SettingRerankEnabled, flagOverride(cmd, "rerank-enabled"))
+	if err != nil {
+		return err
+	}
+	rerankModel, _, err := appConfig.GetString(config.SettingRerankModel, flagOverride(cmd, "rerank-model"))
+	if err != nil {
+		return err
+	}
+	format, _, err := appConfig.GetString(config.SettingArchiveFormat, flagOverride(cmd, "format"))
+	if err != nil {
+		return err
+	}
+	if format == "" {
+		format = "text"
+	}
+
+	aFlags.dbPath = dbPath
+	aFlags.embeddingBaseURL = embBaseURL
+	aFlags.embeddingModel = embModel
+	aFlags.embeddingAPIKey = embAPIKey
+	aFlags.embeddingTimeout = embTimeout
+	aFlags.topK = topK
+	aFlags.rerankEnabled = rerankEnabled
+	aFlags.rerankModel = rerankModel
+	aFlags.format = format
+
+	if !includeAdd {
+		return nil
+	}
+
+	fetchTimeout, _, err := appConfig.GetFloat(config.SettingFetchTimeout, flagOverride(cmd, "fetch-timeout"))
+	if err != nil {
+		return err
+	}
+	fetchMaxSize, _, err := appConfig.GetInt(config.SettingFetchMaxSize, flagOverride(cmd, "max-size"))
+	if err != nil {
+		return err
+	}
+	fetchMaxWords, _, err := appConfig.GetInt(config.SettingFetchMaxWords, flagOverride(cmd, "max-words"))
+	if err != nil {
+		return err
+	}
+	chunkTarget, _, err := appConfig.GetInt(config.SettingChunkTargetSize, flagOverride(cmd, "target-chunk-size"))
+	if err != nil {
+		return err
+	}
+	chunkMax, _, err := appConfig.GetInt(config.SettingChunkMaxSize, flagOverride(cmd, "max-chunk-size"))
+	if err != nil {
+		return err
+	}
+	overlap, _, err := appConfig.GetFloat(config.SettingChunkOverlapRatio, flagOverride(cmd, "overlap-ratio"))
+	if err != nil {
+		return err
+	}
+	parallel, _, err := appConfig.GetInt(config.SettingFetchParallel, flagOverride(cmd, "parallel-fetch"))
+	if err != nil {
+		return err
+	}
+
+	aaFlags.fetchTimeout = fetchTimeout
+	aaFlags.maxSize = int64(fetchMaxSize)
+	aaFlags.maxWords = fetchMaxWords
+	aaFlags.targetChunkSize = chunkTarget
+	aaFlags.maxChunkSize = chunkMax
+	aaFlags.overlapRatio = overlap
+	aaFlags.parallelFetch = parallel
+	return nil
 }
 
 // Helper functions
