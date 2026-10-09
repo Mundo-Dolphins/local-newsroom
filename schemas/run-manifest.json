@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Mundo-Dolphins/local-newsroom/schemas/run-manifest.json",
+  "title": "RunManifest",
+  "description": "A run manifest: the machine-readable record of one complete newsroom pipeline run (v0.5 persistence contract). A run is reproducible and inspectable: it records the workspace, topic, source mode, profile and model metadata, a redacted configuration snapshot, the full stage lifecycle with attempt history, and every artifact produced. The manifest is the durable record of the run; workspace files are derived, reproducible artifacts. Cross-field consistency rules (status vs. stage states, outcome vs. status, timestamps) are enforced by internal/run and documented in docs/contracts-v0.5.md.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "workspace",
+    "status",
+    "topic",
+    "source_mode",
+    "model",
+    "stages",
+    "result",
+    "started_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the run manifest schema. Consumers accept only a known major version; within a major, unknown minor/patch fields are ignored."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^run-[a-zA-Z0-9._-]{1,128}$",
+      "description": "Stable run identifier: run-<compact started_at>-<12-hex digest of workspace name, topic, and started_at>."
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$",
+          "description": "Workspace name; also its directory name on disk."
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional directory path where this workspace lives."
+        }
+      }
+    },
+    "status": {
+      "enum": ["pending", "running", "succeeded", "failed", "cancelled"],
+      "description": "Current lifecycle status of the run. pending is the initial state, running is active, and the rest are terminal."
+    },
+    "topic": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "The topic of the news output. Deterministic for identical inputs."
+    },
+    "source_mode": {
+      "enum": ["explicit", "discovered", "supplement", "unknown"],
+      "description": "How the pipeline got its sources: explicit URLs, runtime discovery, or a supplement of previously discovered sources."
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source_path": { "type": "string" },
+        "hash": { "type": "string", "description": "Optional content hash of the profile file, for reproducibility." }
+      },
+      "description": "The profile used for this run, when one applies."
+    },
+    "model": {
+      "$ref": "#/definitions/modelMetadata"
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Redacted configuration snapshot. Values that look like secrets are stored as the redaction placeholder, never the raw secret."
+        }
+      },
+      "description": "Configuration snapshot at the start of the run, with secret-like values redacted."
+    },
+    "stages": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/stageRecord" },
+      "description": "The planned stages of this run, in pipeline order. A run may plan any subset of the canonical stages; stages not present were not planned."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/artifactRef" },
+      "description": "Artifacts produced by the run. Stage outputs and metadata; never the raw source corpus. Referenced by path, not embedded."
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/warning" },
+      "description": "Non-fatal warnings recorded during the run."
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/errorSummary" },
+      "description": "Run-level error summaries (stage-level errors live on the attempt). Redacted; never contain secrets."
+    },
+    "result": { "$ref": "#/definitions/result" },
+    "started_at": { "$ref": "#/definitions/timestamp" },
+    "updated_at": { "$ref": "#/definitions/timestamp" },
+    "finished_at": {
+      "anyOf": [
+        { "$ref": "#/definitions/timestamp" },
+        { "type": "null" }
+      ],
+      "description": "Set when the run reaches a terminal status; null while in progress."
+    }
+  },
+  "definitions": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC timestamp with up to nanosecond precision."
+    },
+    "modelMetadata": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "endpoint": {
+          "type": "string",
+          "description": "Base URL of the model endpoint. Never includes credentials; values containing embedded credentials are redacted at construction."
+        }
+      },
+      "description": "Model and endpoint metadata for the run. Identifies the model used without recording credentials."
+    },
+    "stageName": {
+      "enum": [
+        "discovery",
+        "fetch",
+        "extract",
+        "research",
+        "verify",
+        "follow_up",
+        "write",
+        "final_check",
+        "render"
+      ]
+    },
+    "stageStatus": {
+      "enum": ["pending", "skipped", "running", "succeeded", "failed", "cancelled"]
+    },
+    "attemptStatus": {
+      "enum": ["running", "succeeded", "failed", "cancelled"]
+    },
+    "stageRecord": {
+      "type": "object",
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "$ref": "#/definitions/stageName" },
+        "status": { "$ref": "#/definitions/stageStatus" },
+        "skip_reason": {
+          "type": "string",
+          "description": "Required when status is skipped; empty otherwise."
+        },
+        "attempts": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/stageAttempt" },
+          "description": "Chronological attempt history, numbered 1..N. Empty for pending and skipped stages."
+        }
+      }
+    },
+    "stageAttempt": {
+      "type": "object",
+      "required": ["number", "status", "started_at"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "status": { "$ref": "#/definitions/attemptStatus" },
+        "started_at": { "$ref": "#/definitions/timestamp" },
+        "finished_at": {
+          "anyOf": [
+            { "$ref": "#/definitions/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/definitions/errorSummary" },
+            { "type": "null" }
+          ],
+          "description": "Required when status is failed; only valid on failed attempts."
+        }
+      }
+    },
+    "artifactKind": {
+      "enum": ["source", "document", "dossier", "verification", "editorial", "factual_check", "rendered", "other"]
+    },
+    "artifactRef": {
+      "type": "object",
+      "required": ["kind", "id", "stage", "produced_at"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/artifactKind" },
+        "id": { "type": "string", "minLength": 1 },
+        "stage": { "$ref": "#/definitions/stageName" },
+        "path": {
+          "type": "string",
+          "description": "Relative path of the artifact on disk. Must not traverse outside the workspace."
+        },
+        "produced_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "required": ["code", "message", "occurred_at"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string", "description": "Redacted; must not contain secrets." },
+        "occurred_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "errorSummary": {
+      "type": "object",
+      "required": ["code", "message", "occurred_at"],
+      "properties": {
+        "code": { "type": "string", "description": "Stable machine-readable error code." },
+        "message": { "type": "string", "description": "Human-readable, redacted error message." },
+        "occurred_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "enum": ["succeeded", "failed", "cancelled"],
+          "description": "Set once the run reaches a terminal status."
+        },
+        "reason": { "type": "string" },
+        "failed_stage": {
+          "anyOf": [
+            { "$ref": "#/definitions/stageName" },
+            { "type": "null" }
+          ],
+          "description": "The stage whose failure caused the run to fail. Only set for failed runs."
+        }
+      },
+      "description": "Terminal result of the run. Empty while the run is in progress."
+    }
+  }
+}
