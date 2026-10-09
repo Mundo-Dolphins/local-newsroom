@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/writer"
@@ -132,10 +133,15 @@ func init() {
 	// Mark dossier as required
 	_ = writeCmd.MarkFlagRequired("dossier")
 
-	// Validate format on pre-run
+	// Validate the resolved format on pre-run. Resolution applies the full
+	// precedence chain (CLI > environment > config file > built-in default).
 	writeCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
-		if !isValidFormat(wFlags.format) {
-			return fmt.Errorf("invalid format %q: must be one of %v", wFlags.format, supportedFormats)
+		format, _, err := appConfig.GetString(config.SettingOutputFormat, flagOverride(cmd, "format"))
+		if err != nil {
+			return err
+		}
+		if !isValidFormat(format) {
+			return fmt.Errorf("invalid format %q: must be one of %v", format, supportedFormats)
 		}
 		return nil
 	}
@@ -147,6 +153,55 @@ func doWrite(cmd *cobra.Command, args []string) error {
 	// Validate inputs
 	if wFlags.dossierPath == "" {
 		return errors.New("--dossier is required")
+	}
+
+	// Resolve generation settings through the full precedence chain
+	// (CLI flags > environment variables > config file > built-in defaults).
+	format, _, err := appConfig.GetString(config.SettingOutputFormat, flagOverride(cmd, "format"))
+	if err != nil {
+		return err
+	}
+	if format == "" {
+		format = "article"
+	}
+	language, _, err := appConfig.GetString(config.SettingDefaultsLanguage, flagOverride(cmd, "language"))
+	if err != nil {
+		return err
+	}
+	if language == "" {
+		language = "en"
+	}
+	tone, _, err := appConfig.GetString(config.SettingTone, flagOverride(cmd, "tone"))
+	if err != nil {
+		return err
+	}
+	if tone == "" {
+		tone = "neutral"
+	}
+	temperature, tempSet, err := appConfig.GetFloat(config.SettingTemperature, flagOverride(cmd, "temperature"))
+	if err != nil {
+		return err
+	}
+	if !tempSet {
+		temperature = 0.3
+	}
+	maxTokens, tokensSet, err := appConfig.GetInt(config.SettingMaxTokens, flagOverride(cmd, "max-tokens"))
+	if err != nil {
+		return err
+	}
+	if !tokensSet {
+		maxTokens = 20000
+	}
+	profileDir, _, err := appConfig.GetString(config.SettingProfilesRoot, flagOverride(cmd, "profile-dir"))
+	if err != nil {
+		return err
+	}
+	profileName, _, err := appConfig.GetString(config.SettingProfilesName, flagOverride(cmd, "profile-name"))
+	if err != nil {
+		return err
+	}
+	if profileName == "" {
+		profileName = "default"
 	}
 
 	// Read the verification result file
@@ -188,13 +243,13 @@ func doWrite(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Build writer config
+	// Build writer config from the resolved settings
 	writerConfig := writer.WriterConfig{
-		Temperature:     wFlags.temperature,
-		MaxOutputTokens: wFlags.maxTokens,
-		Language:        wFlags.language,
-		Tone:            wFlags.tone,
-		ArtifactType:    wFlags.format,
+		Temperature:     temperature,
+		MaxOutputTokens: maxTokens,
+		Language:        language,
+		Tone:            tone,
+		ArtifactType:    format,
 	}
 
 	if wFlags.promptFile != "" {
@@ -205,18 +260,25 @@ func doWrite(cmd *cobra.Command, args []string) error {
 		writerConfig.PromptOverride = string(promptBytes)
 	}
 
-	// Load profile if directory specified
-	if wFlags.profileDir != "" {
-		profileInjector, err := loadProfile(context.Background(), wFlags.profileDir, wFlags.profileName)
+	// Load profile if a profile directory was resolved (flag, env, or
+	// config file) and exists.
+	if profileDir != "" {
+		if _, statErr := os.Stat(profileDir); statErr != nil {
+			return fmt.Errorf("profile directory %q does not exist", profileDir)
+		}
+		profileInjector, err := loadProfile(context.Background(), profileDir, profileName)
 		if err != nil {
 			return fmt.Errorf("failed to load profile: %w", err)
 		}
-		log(wFlags.verbosity, 1, "Loaded profile from %s with author %s", wFlags.profileDir, wFlags.profileName)
+		log(wFlags.verbosity, 1, "Loaded profile from %s with author %s", profileDir, profileName)
 		writerConfig.ProfileInjector = profileInjector
 	}
 
 	// Create writer with LLM client
-	llmClient := buildLLMClientFromFlags("", "", "", 120)
+	llmClient, err := buildLLMClient(cmd)
+	if err != nil {
+		return err
+	}
 	writerInstance, err := writer.New(llmClient, defaultModel, writerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create writer: %w", err)

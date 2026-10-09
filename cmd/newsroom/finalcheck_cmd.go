@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/finalchecker"
 	"github.com/spf13/cobra"
@@ -174,11 +175,36 @@ func doFinalCheck(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	// Resolve the checker's generation parameters through the full
+	// precedence chain (CLI > env > config file > stage built-in defaults
+	// 0.1 / 5000 / en).
+	temperature, tempSet, err := appConfig.GetFloat(config.SettingTemperature, flagOverride(cmd, "temperature"))
+	if err != nil {
+		return err
+	}
+	if !tempSet {
+		temperature = 0.1
+	}
+	maxTokens, tokensSet, err := appConfig.GetInt(config.SettingMaxTokens, flagOverride(cmd, "max-tokens"))
+	if err != nil {
+		return err
+	}
+	if !tokensSet {
+		maxTokens = 5000
+	}
+	language, _, err := appConfig.GetString(config.SettingDefaultsLanguage, flagOverride(cmd, "language"))
+	if err != nil {
+		return err
+	}
+	if language == "" {
+		language = "en"
+	}
+
 	// Build checker config
 	checkerConfig := finalchecker.CheckerConfig{
-		Temperature:     fcFlags.temperature,
-		MaxOutputTokens: fcFlags.maxTokens,
-		Language:        fcFlags.language,
+		Temperature:     temperature,
+		MaxOutputTokens: maxTokens,
+		Language:        language,
 	}
 
 	if fcFlags.promptFile != "" {
@@ -189,8 +215,11 @@ func doFinalCheck(cmd *cobra.Command, args []string) error {
 		checkerConfig.PromptOverride = string(promptBytes)
 	}
 
-	// Create checker with LLM client
-	llmClient := buildLLMClientFromFlags("", "", "", 120)
+	// Create checker with LLM client via the full precedence chain
+	llmClient, err := buildLLMClient(cmd)
+	if err != nil {
+		return err
+	}
 	checker, err := finalchecker.New(llmClient, defaultModel, checkerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create checker: %w", err)

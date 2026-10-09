@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/extractor"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/fetcher"
@@ -79,6 +80,13 @@ type researchFlags struct {
 	maxSize               int64
 	maxWords              int
 	promptFile            string
+
+	// Search credentials resolved from the configuration chain. There are
+	// deliberately no CLI flags for them: secrets come from environment
+	// variables (and environment references in the config file), never from
+	// the command line.
+	searchAPIKey    string
+	searchAPIHeader string
 }
 
 // flags are the research command flags.
@@ -127,13 +135,112 @@ func doResearch(cmd *cobra.Command, args []string) error {
 		return errors.New("--topic is required")
 	}
 
+	// Resolve every setting through the full precedence chain
+	// (CLI flags > environment variables > config file > built-in defaults)
+	// and materialize the winners into the flag struct, which the workflow
+	// config builders below read from.
+	llmBaseURL, _, err := appConfig.GetString(config.SettingLLMBaseURL, flagOverride(cmd, "llm-base-url"))
+	if err != nil {
+		return err
+	}
+	llmModel, _, err := appConfig.GetString(config.SettingLLMModel, flagOverride(cmd, "llm-model"))
+	if err != nil {
+		return err
+	}
+	llmAPIKey, _, err := appConfig.GetString(config.SettingLLMAPIKey, flagOverride(cmd, "llm-api-key"))
+	if err != nil {
+		return err
+	}
+	llmTimeout, _, err := appConfig.GetFloat(config.SettingLLMTimeout, flagOverride(cmd, "llm-timeout"))
+	if err != nil {
+		return err
+	}
+
+	searchBaseURL, _, err := appConfig.GetString(config.SettingSearchBaseURL, flagOverride(cmd, "search-base-url"))
+	if err != nil {
+		return err
+	}
+	searchLanguage, _, err := appConfig.GetString(config.SettingSearchLanguage, flagOverride(cmd, "search-language"))
+	if err != nil {
+		return err
+	}
+	searchTimeRange, _, err := appConfig.GetString(config.SettingSearchTimeRange, flagOverride(cmd, "search-time-range"))
+	if err != nil {
+		return err
+	}
+	searchMaxQueries, _, err := appConfig.GetInt(config.SettingSearchMaxQueries, flagOverride(cmd, "search-max-queries"))
+	if err != nil {
+		return err
+	}
+	searchResultsPerQuery, _, err := appConfig.GetInt(config.SettingSearchResults, flagOverride(cmd, "search-results-per-query"))
+	if err != nil {
+		return err
+	}
+	searchMaxSources, _, err := appConfig.GetInt(config.SettingSearchMaxSources, flagOverride(cmd, "search-max-sources"))
+	if err != nil {
+		return err
+	}
+	searchAPIKey, _, err := appConfig.GetString(config.SettingSearchAPIKey, config.Override{})
+	if err != nil {
+		return err
+	}
+	searchAPIHeader, _, err := appConfig.GetString(config.SettingSearchAPIHeader, config.Override{})
+	if err != nil {
+		return err
+	}
+
+	fetchTimeout, _, err := appConfig.GetFloat(config.SettingFetchTimeout, flagOverride(cmd, "fetch-timeout"))
+	if err != nil {
+		return err
+	}
+	fetchMaxSize, _, err := appConfig.GetInt(config.SettingFetchMaxSize, flagOverride(cmd, "max-size"))
+	if err != nil {
+		return err
+	}
+	fetchMaxWords, _, err := appConfig.GetInt(config.SettingFetchMaxWords, flagOverride(cmd, "max-words"))
+	if err != nil {
+		return err
+	}
+
+	researchTemperature, tempSet, err := appConfig.GetFloat(config.SettingTemperature, config.Override{})
+	if err != nil {
+		return err
+	}
+	if !tempSet {
+		researchTemperature = 0.3
+	}
+	researchMaxTokens, tokensSet, err := appConfig.GetInt(config.SettingMaxTokens, config.Override{})
+	if err != nil {
+		return err
+	}
+	if !tokensSet {
+		researchMaxTokens = 50000
+	}
+
+	// Materialize resolved values into the flag struct.
+	rFlags.llmBaseURL = llmBaseURL
+	rFlags.llmModel = llmModel
+	rFlags.llmAPIKey = llmAPIKey
+	rFlags.llmTimeout = llmTimeout
+	rFlags.searchBaseURL = searchBaseURL
+	rFlags.searchLanguage = searchLanguage
+	rFlags.searchTimeRange = searchTimeRange
+	rFlags.searchMaxQueries = searchMaxQueries
+	rFlags.searchResultsPerQuery = searchResultsPerQuery
+	rFlags.searchMaxSources = searchMaxSources
+	rFlags.searchAPIKey = searchAPIKey
+	rFlags.searchAPIHeader = searchAPIHeader
+	rFlags.fetchTimeout = fetchTimeout
+	rFlags.maxSize = int64(fetchMaxSize)
+	rFlags.maxWords = fetchMaxWords
+
 	// Validate URL-only mode configuration (when URLs are provided without search)
 	urlsProvided := len(rFlags.urls) > 0
 	searchConfigured := rFlags.searchBaseURL != ""
 
 	// Validate at least one source mode is configured
 	if !urlsProvided && !searchConfigured {
-		return errors.New("at least one source mode required: provide --url(s) or configure --search-base-url (or SEARXNG_BASE_URL)")
+		return errors.New("at least one source mode required: provide --url(s) or configure --search-base-url, SEARXNG_BASE_URL, or search.base_url in the config file")
 	}
 
 	// Set up fetcher config
@@ -153,8 +260,8 @@ func doResearch(cmd *cobra.Command, args []string) error {
 
 	// Set up researcher config
 	researcherConfig := researcher.ClientConfig{
-		Temperature:     0.3,
-		MaxOutputTokens: 50000,
+		Temperature:     researchTemperature,
+		MaxOutputTokens: researchMaxTokens,
 	}
 
 	if rFlags.promptFile != "" {
@@ -234,8 +341,8 @@ func buildSupplementConfig() workflow.Config {
 		SearchBaseURL:    rFlags.searchBaseURL,
 		SearchLanguage:   rFlags.searchLanguage,
 		SearchTimeRange:  rFlags.searchTimeRange,
-		SearchAPIKey:     os.Getenv("SEARXNG_API_KEY"),
-		SearchAPIHeader:  os.Getenv("SEARXNG_API_HEADER"),
+		SearchAPIKey:     rFlags.searchAPIKey,
+		SearchAPIHeader:  rFlags.searchAPIHeader,
 	}
 }
 
@@ -258,8 +365,8 @@ func buildDiscoveryConfig() workflow.Config {
 		SearchBaseURL:    rFlags.searchBaseURL,
 		SearchLanguage:   rFlags.searchLanguage,
 		SearchTimeRange:  rFlags.searchTimeRange,
-		SearchAPIKey:     os.Getenv("SEARXNG_API_KEY"),
-		SearchAPIHeader:  os.Getenv("SEARXNG_API_HEADER"),
+		SearchAPIKey:     rFlags.searchAPIKey,
+		SearchAPIHeader:  rFlags.searchAPIHeader,
 	}
 }
 

@@ -548,6 +548,15 @@ func (w *Workflow) buildDiscoveryServiceFromConfig() (*discovery.Discovery, erro
 		MaxResponseSize: 1024 * 1024,
 		UserAgent:       "local-newsroom/0.0.1",
 	}
+	// SearXNG API authentication, resolved upstream (CLI > env > config
+	// file > built-in defaults) and passed through unchanged. Secret values
+	// are never logged by the provider.
+	if w.config.SearchAPIKey != "" {
+		searchConfig.APIKey = w.config.SearchAPIKey
+	}
+	if w.config.SearchAPIHeader != "" {
+		searchConfig.APIHeader = w.config.SearchAPIHeader
+	}
 
 	// Build LLM client for planner
 	llmBaseURL, llmModel, llmAPIKey := w.getLLMConfig()

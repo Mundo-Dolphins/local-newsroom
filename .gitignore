@@ -51,3 +51,7 @@ profiles/private/
 # Generated output
 output/
 logs/
+
+# Prebuilt CLI binary (go build ./cmd/newsroom writes it to the repo root;
+# the official build target outputs to dist/, which is already ignored)
+/newsroom
