@@ -1,0 +1,188 @@
+{
+  "schema_version": "0.5.0",
+  "id": "run-20240115T120000Z-4a367f7b8ca6",
+  "workspace": {
+    "name": "mundodolphins",
+    "path": "workspace/mundodolphins"
+  },
+  "status": "succeeded",
+  "topic": "EU AI Act enters into force",
+  "source_mode": "explicit",
+  "profile": {
+    "id": "mint",
+    "source_path": "profiles/mint",
+    "hash": "a3f9c81d2b4e6f708192a3b4c5d6e7f8"
+  },
+  "model": {
+    "provider": "omlx",
+    "model": "llama3.1:8b",
+    "endpoint": "http://localhost:8000/v1"
+  },
+  "config": {
+    "values": {
+      "omlx_api_key": "[REDACTED]",
+      "omlx_base_url": "http://localhost:8000/v1",
+      "omlx_model": "llama3.1:8b"
+    }
+  },
+  "stages": [
+    {
+      "name": "discovery",
+      "status": "skipped",
+      "skip_reason": "explicit URLs provided"
+    },
+    {
+      "name": "fetch",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:00:03Z",
+          "finished_at": "2024-01-15T12:00:10Z"
+        }
+      ]
+    },
+    {
+      "name": "extract",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:00:11Z",
+          "finished_at": "2024-01-15T12:00:16Z"
+        }
+      ]
+    },
+    {
+      "name": "research",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:00:17Z",
+          "finished_at": "2024-01-15T12:01:00Z"
+        }
+      ]
+    },
+    {
+      "name": "verify",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:01:01Z",
+          "finished_at": "2024-01-15T12:01:15Z"
+        }
+      ]
+    },
+    {
+      "name": "follow_up",
+      "status": "skipped",
+      "skip_reason": "all claims verified; no gaps to follow up"
+    },
+    {
+      "name": "write",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:01:17Z",
+          "finished_at": "2024-01-15T12:01:50Z"
+        }
+      ]
+    },
+    {
+      "name": "final_check",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:01:51Z",
+          "finished_at": "2024-01-15T12:02:00Z"
+        }
+      ]
+    },
+    {
+      "name": "render",
+      "status": "succeeded",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "succeeded",
+          "started_at": "2024-01-15T12:02:01Z",
+          "finished_at": "2024-01-15T12:02:10Z"
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "source",
+      "id": "source-bbva-ai-act",
+      "stage": "fetch",
+      "path": "workspace/mundodolphins/runs/2024-01-15/sources/source-bbva-ai-act.md",
+      "produced_at": "2024-01-15T12:00:10Z"
+    },
+    {
+      "kind": "document",
+      "id": "doc-bbva-ai-act",
+      "stage": "extract",
+      "path": "workspace/mundodolphins/runs/2024-01-15/documents/doc-bbva-ai-act.md",
+      "produced_at": "2024-01-15T12:00:16Z"
+    },
+    {
+      "kind": "dossier",
+      "id": "dossier-eu-ai-act",
+      "stage": "research",
+      "path": "workspace/mundodolphins/runs/2024-01-15/dossier-eu-ai-act.json",
+      "produced_at": "2024-01-15T12:01:00Z"
+    },
+    {
+      "kind": "verification",
+      "id": "verification-eu-ai-act",
+      "stage": "verify",
+      "path": "workspace/mundodolphins/runs/2024-01-15/verification-eu-ai-act.json",
+      "produced_at": "2024-01-15T12:01:15Z"
+    },
+    {
+      "kind": "editorial",
+      "id": "editorial-eu-ai-act",
+      "stage": "write",
+      "path": "workspace/mundodolphins/runs/2024-01-15/editorial-eu-ai-act.md",
+      "produced_at": "2024-01-15T12:01:50Z"
+    },
+    {
+      "kind": "factual_check",
+      "id": "check-eu-ai-act",
+      "stage": "final_check",
+      "path": "workspace/mundodolphins/runs/2024-01-15/check-eu-ai-act.json",
+      "produced_at": "2024-01-15T12:02:00Z"
+    },
+    {
+      "kind": "rendered",
+      "id": "render-eu-ai-act",
+      "stage": "render",
+      "path": "workspace/mundodolphins/runs/2024-01-15/rendered-eu-ai-act.html",
+      "produced_at": "2024-01-15T12:02:10Z"
+    }
+  ],
+  "warnings": [
+    {
+      "code": "partial_discovery",
+      "message": "one source was unreachable; continuing with the rest",
+      "occurred_at": "2024-01-15T12:00:45Z"
+    }
+  ],
+  "result": {
+    "outcome": "succeeded"
+  },
+  "started_at": "2024-01-15T12:00:00Z",
+  "updated_at": "2024-01-15T12:02:11Z",
+  "finished_at": "2024-01-15T12:02:11Z"
+}
