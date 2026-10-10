@@ -695,6 +695,31 @@ type EffectiveEntry struct {
 	Source string `json:"source"`
 }
 
+// SecretValues returns the in-memory values of every secret setting that
+// resolves to a non-empty value, deduplicated, in a stable (table) order.
+//
+// SECURITY: the returned slice holds live credentials. It exists so a
+// persistence layer can redact the exact configured secret values — e.g.
+// `workspace.NewStoreWithSanitizer(root, run.NewSanitizer(cfg.SecretValues(overrides)...))`.
+// Callers must never persist, log, or print the returned values.
+func (c *Config) SecretValues(overrides map[string]Override) []string {
+	seen := make(map[string]bool)
+	var values []string
+	for i := range Settings {
+		s := &Settings[i]
+		if !s.Secret {
+			continue
+		}
+		v, _, err := c.Resolve(s.Name, overrides[s.Name])
+		if err != nil || v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		values = append(values, v)
+	}
+	return values
+}
+
 // Effective resolves every known setting with the given per-setting CLI
 // overrides and returns display-safe entries in a stable order.
 //

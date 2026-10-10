@@ -166,10 +166,10 @@ Quality gates are defined in the Makefile. Running `make check` executes all qua
 ### Available Commands
 
 ```bash
-make check          # Run all quality gates
+make check          # Run all quality gates (fmt vet coverage lint security build)
 make lint           # Run golangci-lint
 make security       # Run gosec security scanner
-make coverage       # Generate coverage report
+make coverage       # Run tests with coverage, enforce COVER_MIN (default 80%)
 make tools          # Download/build quality tools
 ```
 
@@ -199,7 +199,19 @@ go test -v ./...
 
 ### Coverage Report
 
-Coverage reports are generated during CI and available as artifacts after successful runs.
+`make coverage` runs the full test suite with a coverage profile and enforces the
+minimum total (repository-wide) coverage threshold. The threshold is configurable
+via `COVER_MIN` (default `80`, decimals allowed):
+
+```bash
+make coverage                # enforce the default 80% total coverage gate
+make coverage COVER_MIN=85   # enforce 85%
+```
+
+The gate compares the total percentage reported by `go tool cover -func` against
+`COVER_MIN` and fails (non-zero exit) when it is below the threshold. `make check`
+includes this gate, so CI fails on PRs that drop total coverage below `COVER_MIN`.
+Coverage profiles are uploaded as CI artifacts after runs.
 
 ---
 
