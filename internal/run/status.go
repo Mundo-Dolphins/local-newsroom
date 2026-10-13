@@ -9,8 +9,15 @@ package run
 //	                 -> cancelled
 //	pending -----------> cancelled   (a run may be cancelled before it starts)
 //
-// Terminal states (succeeded, failed, cancelled) never transition again
-// within a single manifest.
+// Terminal states may be reopened (terminal -> running) through Manifest
+// Reopen: that is the only path by which a finished record runs again, and
+// it exists so an interrupted (failed or cancelled) run can be resumed, or
+// a stage of a completed run retried on explicit request. A reopened run
+// keeps its full attempt/error history.
+//
+// Apart from Reopen, terminal states never transition again within a single
+// manifest: a finished manifest is a historical record, and re-running a job
+// from scratch is always a new run with a new ID.
 type RunStatus string
 
 // Run status values.
@@ -69,8 +76,11 @@ func (s RunStatus) String() string {
 // Valid transitions:
 //   - pending -> running | cancelled
 //   - running -> succeeded | failed | cancelled
+//   - succeeded | failed | cancelled -> running (Reopen: resume or explicit
+//     retry; the only transition out of a terminal state)
 //
-// Terminal states never transition.
+// Reopen is a deliberate, recorded act (Manifest.Reopen) — the state machine
+// alone never reopens a run.
 func ValidRunTransition(from, to RunStatus) bool {
 	switch from {
 	case RunStatusPending:
@@ -78,18 +88,21 @@ func ValidRunTransition(from, to RunStatus) bool {
 	case RunStatusRunning:
 		return to.Terminal()
 	default:
-		return false
+		return from.Terminal() && to == RunStatusRunning
 	}
 }
 
 // StageStatus enumerates the lifecycle states of a single pipeline stage.
 //
 // Unlike a run, a stage may be skipped (planned but not needed) or retried
-// (failed -> running starts a new attempt). Succeeded and skipped stages are
-// terminal: a stage that produced its output is never re-run within the same
-// run, and a stage that was deliberately skipped stays skipped (re-running it
-// belongs to a new run, which is a resume/plan-mutation concern outside the
-// v0.5 contract).
+// (failed -> running, or cancelled -> running, starts a new attempt).
+// Succeeded and skipped stages are terminal *states*: within a run a stage
+// that produced its output is not re-run implicitly, and a stage that was
+// deliberately skipped stays skipped. The one out-of-band exception is
+// Manifest.InvalidateStage, which resets a stage (and every dependent
+// downstream stage) to pending when an upstream stage re-runs: after
+// invalidation the stage's previous outputs are stale, so the stage runs
+// again through the normal pending -> running transition.
 type StageStatus string
 
 // Stage status values.
@@ -137,10 +150,14 @@ func (s StageStatus) Valid() bool {
 	return false
 }
 
-// Terminal reports whether the status is a final state. All terminal
-// statuses have no transitions out of them, with one documented exception:
-// a failed stage may be retried (failed -> running), which starts a new
-// attempt. See ValidStageTransition.
+// Terminal reports whether the status is a final state. Terminal statuses
+// have no implicit transitions out of them, with two documented exceptions
+// (both explicit retry acts that start a new attempt, see
+// ValidStageTransition):
+//   - a failed stage may be retried (failed -> running);
+//   - a cancelled stage may be retried (cancelled -> running), which covers
+//     a stage whose attempt was interrupted (run cancelled, or the process
+//     died mid-stage and the resume recovered it).
 func (s StageStatus) Terminal() bool {
 	return s == StageStatusSucceeded || s == StageStatusFailed || s == StageStatusSkipped || s == StageStatusCancelled
 }
@@ -156,9 +173,12 @@ func (s StageStatus) String() string {
 // Valid transitions:
 //   - pending -> running | skipped | cancelled
 //   - running -> succeeded | failed | cancelled
-//   - failed  -> running (retry; starts a new attempt)
+//   - failed -> running (retry; starts a new attempt)
+//   - cancelled -> running (retry; starts a new attempt)
 //
-// Succeeded, skipped, and cancelled stages are terminal.
+// Succeeded and skipped stages are terminal. A stage that was invalidated
+// (Manifest.InvalidateStage) is pulled back to pending out of band, and then
+// re-runs through the normal pending -> running transition.
 func ValidStageTransition(from, to StageStatus) bool {
 	switch from {
 	case StageStatusPending:
@@ -167,7 +187,7 @@ func ValidStageTransition(from, to StageStatus) bool {
 		// Skipped is a terminal *state* but not reachable mid-flight: a stage
 		// that started may only succeed, fail, or be cancelled.
 		return to == StageStatusSucceeded || to == StageStatusFailed || to == StageStatusCancelled
-	case StageStatusFailed:
+	case StageStatusFailed, StageStatusCancelled:
 		return to == StageStatusRunning
 	default:
 		return false

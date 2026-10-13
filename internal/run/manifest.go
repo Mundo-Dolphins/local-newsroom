@@ -14,11 +14,16 @@
 //     recording.
 //   - JSON-first: every contract is JSON-serializable.
 //   - Stage-agnostic: a run does NOT execute every standard stage; stages
-//     may be absent from the plan, skipped, retried, or run in any
-//     combination.
+//     may be absent from the plan, skipped, or retried, and the plan order
+//     must respect the explicit stage dependency graph (dependencies.go).
 //
 // This package is a contract layer: it performs no filesystem I/O, no LLM
-// calls, and implements no resume or CLI/TUI behavior.
+// calls, and implements no CLI/TUI behavior. It does define the primitives
+// that make runs resumable: the explicit stage dependency graph
+// (dependencies.go), run reactivation (Manifest.Reopen), downstream
+// invalidation (Manifest.InvalidateStage), and bounded attempt/error history.
+// The runner (internal/runner) and resume (internal/resume) packages build
+// execution and recovery behavior on top of these primitives.
 package run
 
 import (
@@ -44,6 +49,26 @@ const SchemaVersion = "0.5.0"
 
 // SchemaMajorCurrent is the schema major version understood by this package.
 const SchemaMajorCurrent = 0
+
+// ---------------------------------------------------------------------------
+// Bounded history
+// ---------------------------------------------------------------------------
+
+// MaxAttemptsPerStage bounds the per-stage attempt history.
+//
+// A stage may be retried indefinitely across resumes, but the manifest keeps
+// only the most recent attempts: when the bound is exceeded, the oldest
+// attempt is dropped and the history renumbered 1..N. Older history stays
+// inspectable through the run-level error log (also bounded).
+const MaxAttemptsPerStage = 32
+
+// MaxRunErrors bounds the run-level error summary log (oldest entries are
+// dropped first when the bound is exceeded).
+const MaxRunErrors = 64
+
+// MaxRunWarnings bounds the run-level warning log (oldest entries are dropped
+// first when the bound is exceeded).
+const MaxRunWarnings = 64
 
 // ErrUnsupportedSchemaVersion indicates that a manifest was written with a
 // schema major version this package cannot read.
@@ -899,6 +924,15 @@ func (m *Manifest) stageIndex(name StageName) int {
 	return -1
 }
 
+// stageNames returns the planned stage names in plan order.
+func stageNames(stages []StageRecord) []StageName {
+	names := make([]StageName, len(stages))
+	for i, s := range stages {
+		names[i] = s.Name
+	}
+	return names
+}
+
 // touch validates the timestamp against the manifest clock and advances
 // updated_at. It rejects timestamps earlier than the last update so manifests
 // can never record a backwards-moving history.
@@ -915,10 +949,12 @@ func (m *Manifest) touch(at time.Time) error {
 }
 
 // assertActive rejects mutation of terminal runs: a finished manifest is a
-// historical record and must not be rewritten (re-running a job is a new run).
+// historical record and must not be silently rewritten. The single exception
+// is Manifest.Reopen, which deliberately reactivates a terminal run for
+// resume or explicit retry (it does not go through assertActive).
 func (m *Manifest) assertActive() error {
 	if m.Status.Terminal() {
-		return fmt.Errorf("run %s is %s; terminal runs are immutable", m.ID, m.Status)
+		return fmt.Errorf("run %s is %s; terminal runs are immutable (use Reopen to resume or retry)", m.ID, m.Status)
 	}
 	return nil
 }
@@ -1000,6 +1036,23 @@ func (m *Manifest) Validate() error {
 		if err := s.Validate(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	// Plan order must respect the explicit stage dependencies (a stage never
+	// runs before the stages it consumes); an inconsistent plan cannot be
+	// executed safely and is therefore unstoreable and unloadable.
+	if len(planned) == len(m.Stages) {
+		if err := ValidateStagePlanOrder(stageNames(m.Stages)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// Bounded history.
+	if len(m.Errors) > MaxRunErrors {
+		addf("run error log holds %d entries, exceeding the bound of %d", len(m.Errors), MaxRunErrors)
+	}
+	if len(m.Warnings) > MaxRunWarnings {
+		addf("run warning log holds %d entries, exceeding the bound of %d", len(m.Warnings), MaxRunWarnings)
 	}
 
 	// Run status <-> stage status consistency.
@@ -1149,8 +1202,16 @@ func (m *Manifest) transitionRun(to RunStatus, at time.Time) error {
 
 // Start marks the run as running.
 //
-// Valid only from the pending state.
+// Valid only from the pending state. Reactivating a TERMINAL run is not a
+// start — that is Manifest.Reopen, which additionally clears the terminal
+// result and records why the run is running again.
 func (m *Manifest) Start(at time.Time) error {
+	if m.Status.Terminal() {
+		return fmt.Errorf("run %s is %s; terminal runs cannot be started (use Reopen to resume or retry)", m.ID, m.Status)
+	}
+	if m.Status != RunStatusPending {
+		return fmt.Errorf("invalid run transition: %q -> %q", m.Status, RunStatusRunning)
+	}
 	return m.transitionRun(RunStatusRunning, at)
 }
 
@@ -1245,12 +1306,50 @@ func (m *Manifest) Cancel(at time.Time, reason string) error {
 	return nil
 }
 
-// StartStage starts (or restarts after failure) a stage, appending a new
-// attempt.
+// Reopen reactivates a terminal run so it can be resumed, or a stage retried
+// on explicit request.
 //
-// Valid from pending, failed (retry), or — for an already-running stage —
-// never (restarts must wait for the attempt to end). Starting the first
+// Valid only from a terminal state (failed, cancelled, or succeeded). The run
+// returns to running with its terminal result cleared (outcome, reason,
+// failed stage, and finished_at all reset) and a run-level warning recorded.
+// Everything else — every stage record, attempt history, artifact reference,
+// and error/warning log — is preserved, so the durable record of what already
+// happened remains intact.
+//
+// Reopen is the only path out of a terminal state (see
+// ValidRunTransition): it is the deliberate act behind `resume` and
+// `retry --stage`, and it never re-runs anything by itself. The caller (the
+// resume layer) decides which stages are invalidated and which run next.
+//
+// A caller resuming a run that has nothing left to do (a succeeded run whose
+// plan is fully complete) should not reopen it at all: such a resume is a
+// no-op.
+func (m *Manifest) Reopen(at time.Time) error {
+	if !m.Status.Terminal() {
+		return fmt.Errorf("run %s is %s; only terminal runs can be reopened", m.ID, m.Status)
+	}
+	if !ValidRunTransition(m.Status, RunStatusRunning) {
+		return fmt.Errorf("invalid run transition: %q -> %q", m.Status, RunStatusRunning)
+	}
+	if err := m.touch(at); err != nil {
+		return err
+	}
+	m.Status = RunStatusRunning
+	m.FinishedAt = nil
+	m.Result = Result{}
+	return m.AddWarning("reopened", "run reopened for resume or explicit stage retry", at)
+}
+
+// StartStage starts (or restarts after failure or cancellation) a stage,
+// appending a new attempt.
+//
+// Valid from pending, failed (retry), or cancelled (retry of an interrupted
+// or deliberately cancelled attempt) — never for a stage that is already
+// running (a restart must wait for the attempt to end). Starting the first
 // stage of a pending run also moves the run to running.
+//
+// The attempt history is bounded: when the bound (MaxAttemptsPerStage) is
+// reached, the oldest attempt is dropped and the history renumbered 1..N.
 func (m *Manifest) StartStage(name StageName, at time.Time) error {
 	if err := m.assertActive(); err != nil {
 		return err
@@ -1273,10 +1372,43 @@ func (m *Manifest) StartStage(name StageName, at time.Time) error {
 		Status:    StageStatusRunning,
 		StartedAt: ts,
 	})
+	trimAttempts(&rec.Attempts)
 	if m.Status == RunStatusPending {
 		m.Status = RunStatusRunning
 	}
 	return nil
+}
+
+// trimAttempts enforces the per-stage attempt-history bound in place: the
+// oldest attempts are dropped and the survivors renumbered 1..N, so the
+// history always holds the most recent MaxAttemptsPerStage attempts.
+func trimAttempts(attempts *[]StageAttempt) {
+	if len(*attempts) <= MaxAttemptsPerStage {
+		return
+	}
+	drop := len(*attempts) - MaxAttemptsPerStage
+	survivors := (*attempts)[drop:]
+	for i := range survivors {
+		survivors[i].Number = i + 1
+	}
+	*attempts = survivors
+}
+
+// trimErrorLog enforces the run-level error log bound in place (oldest first).
+func trimErrorLog(ess *[]ErrorSummary) {
+	if len(*ess) <= MaxRunErrors {
+		return
+	}
+	*ess = (*ess)[len(*ess)-MaxRunErrors:]
+}
+
+// trimWarningLog enforces the run-level warning log bound in place (oldest
+// first).
+func trimWarningLog(ws *[]Warning) {
+	if len(*ws) <= MaxRunWarnings {
+		return
+	}
+	*ws = (*ws)[len(*ws)-MaxRunWarnings:]
 }
 
 // SkipStage marks a stage as skipped.
@@ -1316,8 +1448,9 @@ func (m *Manifest) SucceedStage(name StageName, at time.Time) error {
 // FailStage fails the stage's current attempt.
 //
 // Valid only while the stage is running. The failure is recorded as a new
-// attempt summary, on the stage, and in the run-level error log (redacted).
-// The stage status becomes failed; a retry via StartStage is still possible.
+// attempt summary, on the stage, and in the run-level error log (redacted,
+// bounded). The stage status becomes failed; a retry via StartStage is still
+// possible.
 func (m *Manifest) FailStage(name StageName, at time.Time, code, message string) error {
 	if message == "" {
 		return fmt.Errorf("failure message is required for stage %q", name)
@@ -1330,12 +1463,16 @@ func (m *Manifest) FailStage(name StageName, at time.Time, code, message string)
 		return err
 	}
 	m.Errors = append(m.Errors, summary)
+	trimErrorLog(&m.Errors)
 	return nil
 }
 
-// CancelStage cancels the stage's current attempt (e.g. the run was stopped).
+// CancelStage cancels the stage's current attempt.
 //
-// Valid only while the stage is running.
+// Valid only while the stage is running. It covers two cases: the run was
+// cancelled on request, and a resume recovering from a crash — a stage whose
+// process died mid-attempt is interrupted (its dangling running attempt is
+// ended as cancelled) before the resume retries it via StartStage.
 func (m *Manifest) CancelStage(name StageName, at time.Time) error {
 	return m.finishStageAttempt(name, StageStatusCancelled, at, nil)
 }
@@ -1374,6 +1511,74 @@ func (m *Manifest) finishStageAttempt(name StageName, to StageStatus, at time.Ti
 	return nil
 }
 
+// InvalidateStage resets a stage and every planned stage that depends on it
+// (transitively, per the explicit stage dependency graph) to pending, in
+// preparation for a re-run.
+//
+// This is the manifest-level rule behind "an upstream stage that re-runs must
+// not leave stale downstream output behind": after invalidation, no stage
+// that consumed the target's outputs — directly or through intermediate
+// stages — still presents its previous output as current, and the artifact
+// references of every reset stage are removed from the run.
+//
+// Behavior for each affected stage (the target and each transitive
+// downstream stage that is part of the plan):
+//
+//   - succeeded or skipped: status is reset to pending and the skip reason
+//     cleared; the attempt history is PRESERVED (a pending stage may carry
+//     terminal attempts) so previous attempts remain inspectable;
+//   - running: the dangling attempt is interrupted (ended as cancelled) and
+//     the stage is then reset as above — an invalidation never strands an
+//     open attempt;
+//   - failed or pending: left as-is (they already re-run; they hold no
+//     artifact references to drop).
+//
+// InvalidateStage is an out-of-band reset, not a lifecycle transition:
+// succeeded and skipped stages are terminal in ValidStageTransition, and only
+// this mutator pulls them back to pending. It requires an active run (a
+// terminal run must be Reopened first), and it may be called from any stage
+// status.
+func (m *Manifest) InvalidateStage(name StageName, at time.Time) error {
+	if err := m.assertActive(); err != nil {
+		return err
+	}
+	if m.stageIndex(name) < 0 {
+		return fmt.Errorf("stage %q is not part of this run", name)
+	}
+	closure := map[StageName]bool{}
+	for _, s := range DownstreamClosure(name) {
+		closure[s] = true
+	}
+	kept := m.Artifacts[:0]
+	for i, a := range m.Artifacts {
+		if a.Stage != "" && closure[a.Stage] {
+			continue
+		}
+		kept = append(kept, m.Artifacts[i])
+	}
+	m.Artifacts = kept
+	for i := range m.Stages {
+		rec := &m.Stages[i]
+		if !closure[rec.Name] {
+			continue
+		}
+		switch rec.Status {
+		case StageStatusPending, StageStatusFailed:
+			continue
+		case StageStatusRunning:
+			if err := m.CancelStage(rec.Name, at); err != nil {
+				return fmt.Errorf("interrupting stage %q during invalidation: %w", rec.Name, err)
+			}
+		}
+		rec.Status = StageStatusPending
+		rec.SkipReason = ""
+	}
+	if err := m.touch(at); err != nil {
+		return err
+	}
+	return nil
+}
+
 // AddArtifact references an artifact produced by the run.
 //
 // The artifact ID must be unique within the run; its stage (when set) must
@@ -1408,7 +1613,7 @@ func (m *Manifest) AddArtifact(ref ArtifactRef) error {
 	return nil
 }
 
-// AddWarning records a run-level warning (redacted).
+// AddWarning records a run-level warning (redacted, log bounded).
 func (m *Manifest) AddWarning(code, message string, at time.Time) error {
 	if err := m.assertActive(); err != nil {
 		return err
@@ -1421,10 +1626,11 @@ func (m *Manifest) AddWarning(code, message string, at time.Time) error {
 		return err
 	}
 	m.Warnings = append(m.Warnings, w)
+	trimWarningLog(&m.Warnings)
 	return nil
 }
 
-// AddError records a run-level error summary (redacted).
+// AddError records a run-level error summary (redacted, log bounded).
 func (m *Manifest) AddError(code, message string, at time.Time) error {
 	if err := m.assertActive(); err != nil {
 		return err
@@ -1437,6 +1643,7 @@ func (m *Manifest) AddError(code, message string, at time.Time) error {
 		return err
 	}
 	m.Errors = append(m.Errors, e)
+	trimErrorLog(&m.Errors)
 	return nil
 }
 

@@ -39,11 +39,12 @@ Related documents:
 7. [Configuration Snapshot](#7-configuration-snapshot)
 8. [Model and Endpoint Metadata](#8-model-and-endpoint-metadata)
 9. [Lifecycle API](#9-lifecycle-api)
-10. [State Transitions](#10-state-transitions)
-11. [Serialization and Versioning](#11-serialization-and-versioning)
-12. [Redaction](#12-redaction)
-13. [Validation Rules](#13-validation-rules)
-14. [Schema File](#14-schema-file)
+10. [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability)
+11. [State Transitions](#11-state-transitions)
+12. [Serialization and Versioning](#12-serialization-and-versioning)
+13. [Redaction](#13-redaction)
+14. [Validation Rules](#14-validation-rules)
+15. [Schema File](#15-schema-file)
 
 ---
 
@@ -51,12 +52,12 @@ Related documents:
 
 1. **Reproducible.** The manifest records everything needed to explain a run: workspace, topic, source mode, profile, model/endpoint, redacted config, stage plan, attempts, artifacts, and timing.
 2. **Inspectable.** One JSON document, one run. Stable IDs and deterministic stage names make runs queryable and diffable.
-3. **Resumable (later).** The manifest is the source of truth for run state. v0.5 ships the contract and in-memory lifecycle only; filesystem persistence and resume logic build on it in v0.6.
-4. **Honest, and secret-free at every persistence boundary.** Error messages, warnings, and config values are redacted; credentials never appear in the manifest. local-newsroom never intentionally persists credentials: the workspace store (the persistence layer) sanitizes every byte that crosses the persistence boundary — every artifact of every kind, source and document content included, and the manifest — before it reaches disk. This policy deliberately overrides byte-identical source preservation: a source or document that contains a detected secret is persisted redacted, with redaction metadata, and source fidelity may be reduced by redaction. See [Redaction](#12-redaction) for the boundary contract.
+3. **Resumable.** The manifest is the source of truth for run state, and v0.5 ships the full stack on top of it: the workspace store persists the manifest and stage artifacts, and the resume layer (`internal/resume`) continues interrupted runs and explicitly retries stages, reusing completed work and invalidating stale downstream output. See [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability).
+4. **Honest, and secret-free at every persistence boundary.** Error messages, warnings, and config values are redacted; credentials never appear in the manifest. local-newsroom never intentionally persists credentials: the workspace store (the persistence layer) sanitizes every byte that crosses the persistence boundary — every artifact of every kind, source and document content included, and the manifest — before it reaches disk. This policy deliberately overrides byte-identical source preservation: a source or document that contains a detected secret is persisted redacted, with redaction metadata, and source fidelity may be reduced by redaction. See [Redaction]((#13-redaction)) for the boundary contract.
 5. **Not every run runs everything.** A run plans an ordered subset of the canonical stages; the plan is part of the manifest.
 6. **Versioned.** `schema_version` is a semantic version string. Consumers reject unknown major versions and ignore unknown fields within a major.
 
-Out of scope for v0.5: loading configuration files, the TUI, filesystem storage, and resume logic.
+Out of scope for v0.5: loading configuration files and the TUI. Filesystem persistence (the workspace store) and resume/retry are in scope; CLI presentation of resume/retry is a separate task.
 
 ---
 
@@ -100,15 +101,15 @@ The workspace name is also its directory name on disk (matching v0.4 workspace c
 | `failed` | a stage failed and the run was stopped | yes |
 | `cancelled` | stopped by request before completion | yes |
 
-Valid run transitions:
+Valid run transitions (matrix in `ValidRunTransition`, `status.go`):
 
 | From \ To | pending | running | succeeded | failed | cancelled |
 |---|---|---|---|---|---|
 | pending | — | ✓ | ✗ | ✗ | ✓ |
 | running | ✗ | ✗ | ✓ | ✓ | ✓ |
-| succeeded / failed / cancelled | ✗ | ✗ | ✗ | ✗ | ✗ |
+| succeeded / failed / cancelled | ✗ | ✓ (Reopen) | ✗ | ✗ | ✗ |
 
-A terminal run is immutable: every mutator rejects changes once the run is terminal.
+A terminal run is immutable **except for `Reopen`**: `Reopen` is the single, deliberate path back from a terminal state to `running`. It clears the terminal result (outcome, reason, failed stage, `finished_at`), records a run-level warning, and preserves everything else — every stage record, attempt history, artifact reference, and log entry. `Reopen` never re-runs anything by itself; the resume layer (or an explicit retry) decides what runs next. See [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability).
 
 ### Stage status
 
@@ -119,9 +120,11 @@ A terminal run is immutable: every mutator rejects changes once the run is termi
 | `running` | an attempt is in flight |
 | `succeeded` | completed successfully |
 | `failed` | the latest attempt failed (retryable) |
-| `cancelled` | stopped while running |
+| `cancelled` | stopped while running (retryable as an interrupted attempt) |
 
-`succeeded`, `failed`, `skipped`, and `cancelled` are terminal for the stage. `skipped` is terminal and **distinct** from `pending`: a skipped stage was a deliberate decision, a pending stage simply has not been reached.
+`succeeded`, `skipped`, `failed`, and `cancelled` are terminal for the stage **as a lifecycle transition**: `failed` and `cancelled` stages may start a new attempt (`→ running`) — that is how a failed stage is retried and how an interrupted stage is recovered. `succeeded` and `skipped` stages cannot start a new attempt through the normal lifecycle; they are only pulled back to `pending` by `InvalidateStage` (an out-of-band reset used when an upstream stage re-runs, see [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability)).
+
+`skipped` is terminal and **distinct** from `pending`: a skipped stage was a deliberate decision, a pending stage simply has not been reached.
 
 ### Attempt status
 
@@ -237,6 +240,7 @@ A run plans an **ordered subset** of these stages:
 
 - `NewManifest` defaults to the full canonical pipeline; pass `Stages` to plan a subset.
 - Stage names must be valid canonical names; duplicates are rejected.
+- **The plan must be a topological order of the stage dependency graph** (see [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability)): every stage's dependencies, when present in the plan, must appear earlier. `NewManifest` and `Manifest.Validate` both enforce this, so an inconsistent plan can never be persisted or loaded.
 - The plan is preserved verbatim in the manifest — a run that skips `discovery` still *plans* it (as a `skipped` record) or omits it entirely; consumers must never assume every run executes every stage.
 
 ### StageRecord
@@ -246,9 +250,9 @@ A run plans an **ordered subset** of these stages:
 | `Name` | `name` | Canonical stage name. |
 | `Status` | `status` | See [Status Model](#3-status-model). |
 | `SkipReason` | `skip_reason,omitempty` | Required when `skipped`; must be empty otherwise. |
-| `Attempts` | `attempts,omitempty` | Chronological history, numbered 1..N. Empty for `pending` and `skipped`. |
+| `Attempts` | `attempts,omitempty` | Chronological history, numbered 1..N (bounded, see below). |
 
-Consistency: the stage status must agree with the attempt history — a `pending` or `skipped` stage has no attempts; a non-terminal stage has its latest attempt `running`; a terminal stage's status equals its latest attempt's status (except `skipped`).
+Consistency: the stage status must agree with the attempt history — a `skipped` stage has no attempts; a `running` stage's latest attempt is `running`; a terminal stage's status equals its latest attempt's status (except `skipped`). A `pending` stage may carry **terminal** attempt history: after `InvalidateStage` resets a previously completed stage, its past attempts are preserved (see below), and the stage simply gets a new attempt when it next starts. A `pending` stage never carries a `running` attempt. **Bounded history:** the manifest keeps only the most recent `MaxAttemptsPerStage` (32) attempts per stage — the oldest are dropped and the survivors renumbered 1..N — and run-level `errors`/`warnings` are bounded at `MaxRunErrors`/`MaxRunWarnings` (64 each, newest kept). A stage may therefore be retried indefinitely across resumes without the manifest growing without limit.
 
 ### StageAttempt
 
@@ -263,6 +267,11 @@ Consistency: the stage status must agree with the attempt history — a `pending
 ### Retry semantics
 
 Failing a stage does **not** terminate the run. A failed stage may be retried: starting the stage again appends a new attempt. The stage's current status is always the status of its **latest** attempt, so the manifest faithfully records the full history (`failed` attempt 1, `running` attempt 2, …).
+
+Two retry shapes exist in v0.5, and they invalidate different things:
+
+- **Resume retry (implicit).** Continuing a failed/interrupted run re-runs every stage whose latest attempt is `failed`, `cancelled`, or a dangling `running`; every `succeeded`/`skipped` stage is reused as-is. No completed stage is re-executed, so nothing downstream is invalidated — their inputs have not changed.
+- **Explicit stage retry.** Re-running a stage the user selects (including a stage that already `succeeded`) makes its output stale, so the stage and **every stage that depends on it, transitively** (per the dependency graph) is reset to `pending` first — attempt history preserved, artifact references dropped. Stages that do not depend on the retried stage are reused. This is what stops a retried stage from silently reusing stale downstream output.
 
 ---
 
@@ -312,7 +321,7 @@ func (s *ConfigSnapshot) Validate() error
 ```
 
 - Keys: `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` (dot/underscore/dash segments, e.g. `omlx_base_url`, `omlx.model`).
-- `Set` redacts: a value under a secret-like key (see [Redaction](#12-redaction)) is stored as `[REDACTED]`; any value containing a secret-like pattern is redacted regardless of its key. An empty value removes the key.
+- `Set` redacts: a value under a secret-like key (see [Redaction]((#13-redaction))) is stored as `[REDACTED]`; any value containing a secret-like pattern is redacted regardless of its key. An empty value removes the key.
 - `Validate()` rejects any value that still looks like a secret.
 
 The snapshot captures the configuration **at run start** so a run can be explained without re-reading (mutable) config files.
@@ -347,24 +356,93 @@ All mutators take `now time.Time` (normalized to UTC) and return an error on ill
 | `Succeed(now)` | `running → succeeded`; requires every planned stage to be `succeeded` or `skipped`. |
 | `Fail(now, code, message)` | `running → failed`; records a redacted run-level error, cancels in-flight stages as failed, and names the failing stage in `result`. |
 | `Cancel(now, reason)` | `pending|running → cancelled`; in-flight stages become `cancelled`. |
-| `StartStage(name, now)` | `pending → running` (first attempt) or `failed → running` (retry, new attempt number). The run must be `running`. |
-| `SkipStage(name, now, reason)` | `pending → skipped` with the recorded reason. The run must be `running`. |
+| `StartStage(name, now)` | `pending → running` (first attempt) or `failed`/`cancelled` → `running` (retry or recovery of an interrupted attempt — new attempt number). The run must be active. |
+| `SkipStage(name, now, reason)` | `pending → skipped` with the recorded reason. The run must be active. |
 | `SucceedStage(name, now)` | latest attempt → `succeeded`. |
 | `FailStage(name, now, code, message)` | latest attempt → `failed` with a redacted error; stage → `failed`; run-level error recorded. |
-| `CancelStage(name, now)` | latest attempt → `cancelled`. |
+| `CancelStage(name, now)` | latest attempt → `cancelled`; in-flight or dangling attempt ends. |
+| `Reopen(now)` | `succeeded`/`failed`/`cancelled` → `running` (the only path out of a terminal state). Clears the terminal result, records a `reopened` warning, preserves all stage records, attempts, artifacts, and logs. |
+| `InvalidateStage(name, now)` | Out-of-band reset (not a lifecycle transition): `name` and every transitive downstream stage in the plan are pulled back to `pending` (succeeded/skipped stages reset, running stages interrupted first, failed/pending stages left as-is); their artifact references are removed from the run while attempt history is preserved. The run must be active (reopen a terminal run first). See [Stage Dependencies and Resumability](#10-stage-dependencies-and-resumability). |
 | `AddArtifact(ref)` | Records an artifact (validated, redacted path checked). |
-| `AddWarning(code, message, now)` | Appends a redacted warning. |
-| `AddError(code, message, now)` | Appends a redacted run-level error. |
+| `AddWarning(code, message, now)` | Appends a redacted warning (log bounded). |
+| `AddError(code, message, now)` | Appends a redacted run-level error (log bounded). |
 
 Guarantees:
 
-- **No terminal overwrites.** Every mutator rejects calls on a terminal run (`ErrManifestNotActive`).
+- **No terminal overwrites.** Every mutator except `Reopen` rejects calls on a terminal run (`ErrManifestNotActive`). `Reopen` is the deliberate, auditable exception (it records a warning).
 - **No time travel.** `updated_at` is monotonic; a `now` earlier than the current `updated_at` is rejected (`ErrTimestampRegression`).
 - **Redaction at the door.** Every user-supplied string (skip reason, error message, warning, config value, endpoint) passes `RedactSecrets` before it is stored.
+- **Bounded logs.** Attempt history and the run error/warning logs are trimmed to their bounds (see [Stage Records and Attempts](#5-stage-records-and-attempts)) on every mutation, so repeated retries cannot grow the manifest without limit.
 
 ---
 
-## 10. State Transitions
+## 10. Stage Dependencies and Resumability
+
+### The explicit dependency graph
+
+Stage dependencies are **data, not string ordering**. `dependencies.go` records, for every standard stage, the stages whose outputs it consumes:
+
+| Stage | Depends on |
+|---|---|
+| `discovery` | — |
+| `fetch` | `discovery` |
+| `extract` | `fetch` |
+| `research` | `extract` |
+| `verify` | `research` |
+| `follow_up` | `verify` |
+| `write` | `verify`, `follow_up` |
+| `final_check` | `write` |
+| `render` | `final_check` |
+
+API:
+
+- `Dependencies(stage)` — the direct upstream stages, in canonical order.
+- `DownstreamClosure(stage)` — the stage itself plus every stage that (transitively) depends on it, in canonical order. This is the **invalidation set** of a retry of `stage`.
+- `ValidateStagePlanOrder(names)` — a plan is consistent iff it is a topological order of the graph (dependencies absent from the plan are satisfied by definition: a run may plan any subset, e.g. skipping `discovery` for explicit URLs). Enforced by `NewManifest` and `Manifest.Validate`, so the plan order and the graph can never silently disagree; the canonical order is one topological order.
+
+### Persistence and layering
+
+- `internal/workspace` — the filesystem store: run directories (`<root>/runs/<run-id>/`), the manifest file, and stage artifacts, all behind the sanitization boundary. `CreateRun` claims a run directory; `SaveManifest`/`LoadManifest` persist and reload the contract object; `SaveArtifact`/`LoadArtifact` persist stage outputs (content sanitized, redaction sidecars as documented in [Redaction](#13-redaction)).
+- `internal/runner` — the execution engine. Given a manifest, a store, and per-stage executors (injected, one per planned stage, in plan order), it runs the plan, persisting the manifest after every lifecycle change so a crash leaves a coherent durable state. In **resume mode** (`Config.Resume`) it reuses the existing run directory, reuses every `succeeded`/`skipped` stage, takes over a dangling `running` attempt, and refuses terminal manifests (the resume layer reopens those first).
+- `internal/resume` — the recovery policy on top of the two: `Analyze` (read-only assessment), `Resume` (continue an interrupted run), `RetryStage` (explicit re-run of a stage and its dependents). This package performs no LLM calls and knows nothing about concrete stage implementations; it is fully testable with fake executors and a temporary workspace.
+
+### Resume: continue an interrupted run
+
+Given a run ID, `Resume` loads the persisted manifest and verifies it before executing anything:
+
+1. **Manifest integrity.** The manifest must parse and pass full validation; a torn or invalid document is refused (`ErrCorruptManifest`), as is an unknown run ID.
+2. **Artifact integrity (fail closed).** Every artifact of every `succeeded` stage must exist and be readable in the run directory; a missing or unreadable artifact refuses the resume (`ErrMissingArtifact`), and a reference on a stage that did not complete, or a pathless reference, is an inconsistency (`ErrInconsistentRun`). Nothing is re-executed and nothing on disk is touched when verification fails.
+
+It then prepares the manifest (persisted before the first stage runs, so a second crash loses no state):
+
+- A terminal run is **reopened** (`Reopen`).
+- Every dangling `running` stage (a process that died mid-stage) is interrupted as `cancelled` — a resume never strands an open attempt, and no persisted manifest ever claims a stage is running when it is not.
+
+It executes every stage that is not `succeeded`/`skipped` (failed, cancelled, or never started), in plan order, and reuses the rest. A `succeeded` run resumes as a **no-op**: nothing executes, nothing on disk changes. A failed run whose plan is somehow already fully complete **self-heals**: reopened, with nothing left to do, it is completed in place.
+
+When the run stops again, the manifest records the new state and the run can be resumed once more.
+
+### Retry: explicit re-run of a stage
+
+`RetryStage(run, stage)` works on a run in **any** terminal state (including a fully `succeeded` one):
+
+1. The run is reopened (unless already active).
+2. The target stage and its **downstream closure** (per the graph) are invalidated: reset to `pending`, skip reasons cleared, artifact references dropped, attempt history **preserved** (bounded). A dangling `running` stage in the closure is interrupted first.
+3. The target and every dependent downstream stage execute; every stage not in the closure is reused without re-execution.
+
+Consequences, all covered by the resume test suite:
+
+- Retrying `verify` re-runs `verify`, `follow_up`, `write`, `final_check`, `render`; `research` is untouched.
+- Retrying `write` re-runs exactly `write`, `final_check`, `render` — the ticket's stale-downstream case.
+- Skipped stages in the closure are re-skipped (their recorded reason re-applied), never silently executed.
+
+### Bounded history and preserved attempts
+
+Previous attempt metadata is never destroyed: retrying a stage appends to its attempt history, and invalidation keeps it. The manifest stays bounded: per-stage attempt history is trimmed to the 32 most recent attempts (survivors renumbered 1..N), and run-level error/warning logs to the 64 newest entries. Repeated retries of a failing stage therefore converge to a constant-size manifest that always ends with the newest attempt.
+
+---
+
+## 11. State Transitions
 
 ### Run
 
@@ -373,6 +451,7 @@ pending ──Start──▶ running ──Succeed──▶ succeeded
                      │  └────Fail─────▶ failed
                      │  └───Cancel────▶ cancelled
 pending ──Cancel──▶ cancelled
+succeeded/failed/cancelled ──Reopen──▶ running   (the only path out of terminal)
 ```
 
 ### Stage
@@ -380,16 +459,17 @@ pending ──Cancel──▶ cancelled
 ```
 pending ──StartStage──▶ running ──SucceedStage──▶ succeeded
    │  └───────────────────┴──FailStage──────────▶ failed ──StartStage (retry)──▶ running
-   │                                             └──CancelStage────────────────▶ cancelled
+   │                                             └──CancelStage────────────────▶ cancelled ──StartStage (recovery)──▶ running
    └──SkipStage──▶ skipped
 running ──CancelStage (on run cancel)──▶ cancelled
+succeeded/skipped ──InvalidateStage──▶ pending   (out-of-band reset on upstream retry; not a lifecycle transition)
 ```
 
-`succeeded`, `skipped`, and `cancelled` stages are terminal and cannot be retried; only `failed` stages retry. The rules are explicit in `ValidRunTransition`, `ValidStageTransition`, and `ValidAttemptTransition` in `status.go`, with the full matrix covered by `status_test.go`.
+`failed` and `cancelled` stages retry through the normal lifecycle (`→ running`): a failed stage is retried by resuming its run, and a `cancelled` stage (an interrupted or deliberately stopped attempt) is recovered the same way. `succeeded` and `skipped` stages cannot start a new attempt at all; only `InvalidateStage` pulls them back to `pending`, and only as part of invalidating an upstream stage's downstream closure before a retry presents fresh output. The rules are explicit in `ValidRunTransition`, `ValidStageTransition`, and `ValidAttemptTransition` in `status.go`, with the full matrix covered by `status_test.go`.
 
 ---
 
-## 11. Serialization and Versioning
+## 12. Serialization and Versioning
 
 - Wire format: JSON. `MarshalManifest` produces compact 2-space-indented JSON; `UnmarshalManifest` parses and runs the full `Validate()`.
 - `Timestamp` serializes as RFC 3339 with up to nanosecond precision (trailing zeros trimmed; zero values marshal as `null`).
@@ -402,7 +482,7 @@ Future schema changes: bump the patch/minor and update the JSON Schema and this 
 
 ---
 
-## 12. Redaction
+## 13. Redaction
 
 Redaction has two layers: the **pattern detectors** in `redact.go` and the **
 exact-value sanitizer** in `sanitizer.go` (`Sanitizer` / `NewSanitizer`).
@@ -479,7 +559,7 @@ redact their own structures:
 
 ---
 
-## 13. Validation Rules
+## 14. Validation Rules
 
 `Manifest.Validate()` (and the nested `Validate`s) enforce, in summary:
 
@@ -500,6 +580,6 @@ redact their own structures:
 
 ---
 
-## 14. Schema File
+## 15. Schema File
 
 `schemas/run-manifest.json` (draft-07) mirrors the structure above: required fields, enum values, ID patterns, and timestamp formats. It documents and sanity-checks the wire format; the Go `Validate()` remains the authoritative gate, since JSON Schema cannot express the cross-field consistency rules (run↔stage↔attempt, outcome↔status, timestamp ordering).

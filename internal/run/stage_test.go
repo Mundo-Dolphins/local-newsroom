@@ -96,6 +96,20 @@ func TestStageRecordValidate(t *testing.T) {
 		t.Fatalf("valid retried stage: %v", err)
 	}
 
+	// An invalidated stage: pending, but carrying its terminal attempt history
+	// (the state a stage is in after Manifest.InvalidateStage resets it for a
+	// re-run).
+	validInvalidated := StageRecord{
+		Name:   StageWrite,
+		Status: StageStatusPending,
+		Attempts: []StageAttempt{
+			{Number: 1, Status: StageStatusSucceeded, StartedAt: ts(10), FinishedAt: ptr(ts(20))},
+		},
+	}
+	if err := validInvalidated.Validate(); err != nil {
+		t.Fatalf("valid invalidated (pending with terminal attempts) stage: %v", err)
+	}
+
 	cases := []struct {
 		name  string
 		stage StageRecord
@@ -105,7 +119,9 @@ func TestStageRecordValidate(t *testing.T) {
 		{"running without attempts", StageRecord{Name: StageFetch, Status: StageStatusRunning}},
 		{"succeeded without attempts", StageRecord{Name: StageFetch, Status: StageStatusSucceeded}},
 		{"failed without attempts", StageRecord{Name: StageFetch, Status: StageStatusFailed}},
-		{"pending with attempts", StageRecord{Name: StageFetch, Status: StageStatusPending, Attempts: []StageAttempt{{Number: 1, Status: StageStatusRunning, StartedAt: ts(0)}}}},
+		{"pending with a running attempt", StageRecord{Name: StageFetch, Status: StageStatusPending, Attempts: []StageAttempt{{Number: 1, Status: StageStatusRunning, StartedAt: ts(0)}}}},
+		{"pending with an unnumbered-gap attempt history", StageRecord{Name: StageFetch, Status: StageStatusPending, Attempts: []StageAttempt{{Number: 2, Status: StageStatusSucceeded, StartedAt: ts(0), FinishedAt: ptr(ts(1))}}}},
+		{"pending with over-bound attempt history", StageRecord{Name: StageFetch, Status: StageStatusPending, Attempts: make([]StageAttempt, MaxAttemptsPerStage+1)}},
 		{"skipped with attempts", StageRecord{Name: StageFetch, Status: StageStatusSkipped, SkipReason: "x", Attempts: []StageAttempt{{Number: 1, Status: StageStatusFailed, StartedAt: ts(0), FinishedAt: ptr(ts(1)), Error: &ErrorSummary{Message: "e", OccurredAt: ts(1)}}}}},
 		{"status mismatch with last attempt", StageRecord{
 			Name: StageFetch, Status: StageStatusSucceeded,

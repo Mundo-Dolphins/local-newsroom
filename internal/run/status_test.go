@@ -90,7 +90,8 @@ func TestValidRunTransition(t *testing.T) {
 			case RunStatusRunning:
 				want = to == RunStatusSucceeded || to == RunStatusFailed || to == RunStatusCancelled
 			default:
-				want = false
+				// Terminal states may only be reopened for resume/retry.
+				want = from.Terminal() && to == RunStatusRunning
 			}
 			if got := ValidRunTransition(from, to); got != want {
 				t.Errorf("ValidRunTransition(%q, %q) = %v, want %v", from, to, got, want)
@@ -100,8 +101,16 @@ func TestValidRunTransition(t *testing.T) {
 	if ValidRunTransition(RunStatusPending, RunStatusSucceeded) {
 		t.Error("a pending run must not jump straight to succeeded")
 	}
-	if ValidRunTransition(RunStatusFailed, RunStatusRunning) {
-		t.Error("a failed run must not restart (resume is a new run)")
+	if ValidRunTransition(RunStatusFailed, RunStatusSucceeded) {
+		t.Error("a failed run must not jump to succeeded without re-running")
+	}
+	// Reopen is the only exit of a terminal state, and every terminal state
+	// may be reopened (failed/cancelled for resume, succeeded for explicit
+	// retry).
+	if !ValidRunTransition(RunStatusFailed, RunStatusRunning) ||
+		!ValidRunTransition(RunStatusCancelled, RunStatusRunning) ||
+		!ValidRunTransition(RunStatusSucceeded, RunStatusRunning) {
+		t.Error("every terminal state must be reopenable for resume/retry")
 	}
 }
 
@@ -116,7 +125,7 @@ func TestValidStageTransition(t *testing.T) {
 				want = to == StageStatusRunning || to == StageStatusSkipped || to == StageStatusCancelled
 			case StageStatusRunning:
 				want = to == StageStatusSucceeded || to == StageStatusFailed || to == StageStatusCancelled
-			case StageStatusFailed:
+			case StageStatusFailed, StageStatusCancelled:
 				want = to == StageStatusRunning
 			default:
 				want = false
@@ -134,17 +143,23 @@ func TestValidStageTransition(t *testing.T) {
 	if !ValidStageTransition(StageStatusFailed, StageStatusRunning) {
 		t.Error("failed -> running (retry) must be valid")
 	}
+	if !ValidStageTransition(StageStatusCancelled, StageStatusRunning) {
+		t.Error("cancelled -> running (retry of an interrupted stage) must be valid")
+	}
 	if ValidStageTransition(StageStatusSucceeded, StageStatusRunning) {
-		t.Error("succeeded stages are terminal: re-run must be rejected")
+		t.Error("succeeded stages are terminal: re-run must be rejected (use InvalidateStage)")
 	}
 	if ValidStageTransition(StageStatusSkipped, StageStatusRunning) {
-		t.Error("skipped stages stay skipped within a run")
+		t.Error("skipped stages stay skipped within a run (use InvalidateStage to re-plan)")
 	}
 	if ValidStageTransition(StageStatusRunning, StageStatusSkipped) {
 		t.Error("a running stage cannot be skipped mid-flight")
 	}
 	if ValidStageTransition(StageStatusPending, StageStatusSucceeded) {
 		t.Error("a stage cannot succeed without running")
+	}
+	if ValidStageTransition(StageStatusSucceeded, StageStatusPending) {
+		t.Error("succeeded -> pending is not a lifecycle transition (InvalidateStage is out of band)")
 	}
 }
 
