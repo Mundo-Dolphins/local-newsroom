@@ -146,9 +146,9 @@ func (a StageAttempt) Validate() error {
 // StageRecord is the manifest entry for one pipeline stage within a run.
 //
 // A record captures the stage's current status, the reason it was skipped
-// (when skipped), and the full attempt history. Stage records never carry
-// stage inputs or outputs directly: artifacts are referenced at the run
-// level via ArtifactRef.
+// (when skipped), and the attempt history. Stage records never carry stage
+// inputs or outputs directly: artifacts are referenced at the run level via
+// ArtifactRef.
 type StageRecord struct {
 	// Name is the stage this record tracks.
 	Name StageName `json:"name"`
@@ -161,7 +161,13 @@ type StageRecord struct {
 	SkipReason string `json:"skip_reason,omitempty"`
 
 	// Attempts is the chronological attempt history (1..N).
-	// Empty for pending and skipped stages.
+	//
+	// Skipped stages have no attempts. A pending stage normally has none, but
+	// MAY carry terminal attempt history: a stage that ran, was invalidated
+	// (Manifest.InvalidateStage) because an upstream stage re-ran, is back to
+	// pending awaiting a re-run and keeps everything its earlier attempts did
+	// (bounded by MaxAttemptsPerStage). A running attempt can never sit on a
+	// pending record.
 	Attempts []StageAttempt `json:"attempts,omitempty"`
 }
 
@@ -175,6 +181,9 @@ func (s StageRecord) Validate() error {
 		return fmt.Errorf("stage %q: invalid status %q", s.Name, s.Status)
 	}
 
+	if len(s.Attempts) > MaxAttemptsPerStage {
+		return fmt.Errorf("stage %q: attempt history holds %d attempts, exceeding the bound of %d", s.Name, len(s.Attempts), MaxAttemptsPerStage)
+	}
 	for i, a := range s.Attempts {
 		if a.Number != i+1 {
 			return fmt.Errorf("stage %q: attempt numbers must be sequential 1..N (got %d at position %d)", s.Name, a.Number, i+1)
@@ -186,9 +195,17 @@ func (s StageRecord) Validate() error {
 
 	// Status <-> attempt-history consistency.
 	switch s.Status {
-	case StageStatusPending, StageStatusSkipped:
+	case StageStatusSkipped:
 		if len(s.Attempts) > 0 {
 			return fmt.Errorf("stage %q: status %q must have no attempts", s.Name, s.Status)
+		}
+	case StageStatusPending:
+		// Pending may retain terminal attempt history after an invalidation;
+		// it must never be mid-attempt.
+		for _, a := range s.Attempts {
+			if a.Status == StageStatusRunning {
+				return fmt.Errorf("stage %q: status %q cannot have a running attempt", s.Name, s.Status)
+			}
 		}
 	default:
 		if len(s.Attempts) == 0 {

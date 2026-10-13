@@ -45,7 +45,7 @@
     },
     "status": {
       "enum": ["pending", "running", "succeeded", "failed", "cancelled"],
-      "description": "Current lifecycle status of the run. pending is the initial state, running is active, and the rest are terminal."
+      "description": "Current lifecycle status of the run. pending is the initial state, running is active, and the rest are terminal. Terminal runs are immutable except for Reopen, the single deliberate path back to running (resume / explicit stage retry)."
     },
     "topic": {
       "type": "string",
@@ -144,7 +144,8 @@
       ]
     },
     "stageStatus": {
-      "enum": ["pending", "skipped", "running", "succeeded", "failed", "cancelled"]
+      "enum": ["pending", "skipped", "running", "succeeded", "failed", "cancelled"],
+      "description": "pending/skipped have no in-flight attempt; running has one; succeeded/failed/cancelled are terminal stage states. failed and cancelled may start a new attempt (retry / recovery of an interrupted stage); succeeded and skipped are only reset to pending by InvalidateStage when an upstream stage re-runs."
     },
     "attemptStatus": {
       "enum": ["running", "succeeded", "failed", "cancelled"]
@@ -162,7 +163,7 @@
         "attempts": {
           "type": "array",
           "items": { "$ref": "#/definitions/stageAttempt" },
-          "description": "Chronological attempt history, numbered 1..N. Empty for pending and skipped stages."
+          "description": "Chronological attempt history, numbered 1..N, bounded to the 32 most recent attempts (oldest dropped, survivors renumbered). Empty for skipped stages; a pending stage may carry terminal attempts after an invalidation (inflight attempts are never left on a pending stage)."
         }
       }
     },

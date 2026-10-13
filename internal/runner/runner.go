@@ -27,8 +27,15 @@
 // terminated mid-execution is left readable, at exactly the state its last
 // save captured.
 //
-// Retry and resume are out of scope: a failed stage stops the run, and
-// re-running a job is a new run with a new ID.
+// Resume mode (Config.Resume): the same Run entry point can continue an
+// already-started run instead of creating a new one. The run directory and
+// manifest already exist (claimed by the original run), a terminal run must
+// have been reactivated (Manifest.Reopen) by the caller first, and stages
+// that already finished (succeeded or skipped) are not re-executed — the
+// expensive work of a previous cycle is reused. The resume layer
+// (internal/resume) loads and validates the persisted state, invalidates
+// what an upstream retry makes stale, and hands the prepared manifest to the
+// runner in this mode.
 package runner
 
 import (
@@ -38,7 +45,6 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
-	"github.com/Mundo-Dolphins/local-newsroom/internal/workspace"
 )
 
 // Clock returns the current time. Tests inject a fixed or advancing clock for
@@ -64,7 +70,7 @@ type StageInput struct {
 	// Store is the workspace store; stages may use it to read earlier stage
 	// artifacts (e.g. a dossier consumed by the verify stage) via
 	// Store.LoadArtifact.
-	Store *workspace.Store
+	Store Store
 
 	// RunDir is the absolute path of the run directory.
 	RunDir string
@@ -117,6 +123,31 @@ type Stage struct {
 	SkipReason string
 }
 
+// Store is the persistence boundary the runner requires from the workspace.
+//
+// The concrete implementation is workspace.Store (the filesystem store); the
+// runner depends only on this interface, so tests can substitute fakes and
+// fault-injecting wrappers (a failing disk, a broken permission) without
+// touching the real store. Sanitizer is part of the contract because the
+// runner sanitizes every failure message before it is recorded.
+type Store interface {
+	// CreateRun claims the run directory and persists the initial manifest.
+	CreateRun(m *run.Manifest) (string, error)
+	// SaveManifest persists the manifest and returns its path.
+	SaveManifest(m *run.Manifest) (string, error)
+	// LoadManifest loads a persisted manifest and its run directory.
+	LoadManifest(id run.RunID) (*run.Manifest, string, error)
+	// RunDir returns the run directory for an ID.
+	RunDir(id run.RunID) (string, error)
+	// SaveArtifact persists one stage output file inside the run directory.
+	SaveArtifact(id run.RunID, ref run.ArtifactRef, data []byte) (string, error)
+	// LoadArtifact reads a persisted artifact back (stages read earlier
+	// stage outputs through it).
+	LoadArtifact(id run.RunID, relPath string) ([]byte, error)
+	// Sanitizer is the byte-level sanitization policy of the store.
+	Sanitizer() *run.Sanitizer
+}
+
 // Config configures one run.
 type Config struct {
 	// Manifest is the run manifest. Its stage plan is the authoritative
@@ -124,13 +155,34 @@ type Config struct {
 	Manifest *run.Manifest
 
 	// Store is the workspace the run is persisted into.
-	Store *workspace.Store
+	Store Store
 
 	// Stages pairs each planned stage with its executor (or skip reason).
 	Stages []Stage
 
 	// Clock supplies timestamps; it defaults to time.Now (UTC).
 	Clock Clock
+
+	// Resume selects resume mode for an already-started run:
+	//
+	//   - the run directory is NOT re-claimed (CreateRun is skipped; the
+	//     directory must already exist);
+	//   - a run that is still pending is started as usual; a run that is
+	//     already running is taken over in place (the manifest was persisted
+	//     by the resume layer before Run was called);
+	//   - stages whose current status is succeeded or skipped are NOT
+	//     re-executed: their output from the previous cycle is reused;
+	//   - a stage left running by a crashed cycle is executed against its
+	//     dangling attempt instead of starting a second one;
+	//   - a terminal manifest is refused: terminal runs must be reopened
+	//     (Manifest.Reopen) and stale stages invalidated
+	//     (Manifest.InvalidateStage) by the resume layer before calling Run.
+	//
+	// After the stage loop, if the run is still running (every stage ended
+	// up succeeded or skipped, e.g. because the final planned stage was
+	// already complete), the run is completed in the same snapshot as a
+	// fresh run.
+	Resume bool
 }
 
 // Result summarizes a finished run, including failed and cancelled ones.
@@ -180,26 +232,54 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		res.Err = err
 		return res, fmt.Errorf("runner: invalid manifest: %w", err)
 	}
-	if err := validateStageConfig(m, cfg.Stages); err != nil {
+	if err := ValidateStageConfig(m, cfg.Stages); err != nil {
 		res.Err = err
 		return res, err
 	}
+	if cfg.Resume && m.Status.Terminal() {
+		res.Status = m.Status
+		res.Err = fmt.Errorf("runner: cannot resume a terminal run in %s state; reopen it (Manifest.Reopen) and invalidate stale stages first", m.Status)
+		return res, res.Err
+	}
 
-	runDir, err := cfg.Store.CreateRun(m)
-	if err != nil {
-		res.Err = err
-		return res, fmt.Errorf("runner: creating run: %w", err)
+	runDir := ""
+	var err error
+	if cfg.Resume {
+		// The run directory was claimed by the original run; resume reuses
+		// it and its persisted manifest.
+		runDir, err = cfg.Store.RunDir(m.ID)
+		if err != nil {
+			res.Err = err
+			return res, fmt.Errorf("runner: resuming run: %w", err)
+		}
+		if m.Status == run.RunStatusPending {
+			// A run that was claimed but never started (a crash between the
+			// manifest write and the start) starts like a fresh run.
+			if err := m.Start(cfg.Clock()); err != nil {
+				res.Status = m.Status
+				res.Err = err
+				return res, fmt.Errorf("runner: starting resumed run: %w", err)
+			}
+			if err := persistManifest(cfg); err != nil {
+				return failRun(cfg, res, "run_error", err)
+			}
+		}
+	} else {
+		runDir, err = cfg.Store.CreateRun(m)
+		if err != nil {
+			res.Err = err
+			return res, fmt.Errorf("runner: creating run: %w", err)
+		}
+		if err := m.Start(cfg.Clock()); err != nil {
+			res.Status = m.Status
+			res.Err = err
+			return res, fmt.Errorf("runner: starting run: %w", err)
+		}
+		if err := persistManifest(cfg); err != nil {
+			return failRun(cfg, res, "run_error", err)
+		}
 	}
 	res.RunDir = runDir
-
-	if err := m.Start(cfg.Clock()); err != nil {
-		res.Status = m.Status
-		res.Err = err
-		return res, fmt.Errorf("runner: starting run: %w", err)
-	}
-	if err := persistManifest(cfg); err != nil {
-		return failRun(cfg, res, "run_error", err)
-	}
 
 	for i := range cfg.Stages {
 		st := &cfg.Stages[i]
@@ -208,6 +288,34 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// A cancelled context stops the run before the stage starts.
 		if ctx.Err() != nil {
 			return cancelRun(ctx, cfg, res, run.StageName(""))
+		}
+
+		if cfg.Resume {
+			status, err := m.StageStatusOf(st.Name)
+			if err != nil {
+				return failRun(cfg, res, "run_error", err)
+			}
+			switch status {
+			case run.StageStatusSucceeded, run.StageStatusSkipped:
+				// Completed in a previous cycle: reuse the persisted output
+				// and do not re-execute (the rule that keeps resumed runs
+				// from paying twice for expensive stages).
+				continue
+			case run.StageStatusRunning:
+				// A dangling attempt left by a crashed cycle: execute against
+				// the existing attempt instead of starting a second one.
+				out, err := executeStage(ctx, cfg, st, runDir)
+				if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return cancelRun(ctx, cfg, res, st.Name)
+				}
+				if err != nil {
+					return failRun(cfg, res, classifyCode(err), err)
+				}
+				if err := persistStageOutput(cfg, st, out, isLast); err != nil {
+					return failRun(cfg, res, classifyCode(err), err)
+				}
+				continue
+			}
 		}
 
 		if st.Fn == nil {
@@ -248,6 +356,17 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	// An empty stage plan completes the run as soon as it starts.
 	if len(cfg.Stages) == 0 {
+		if err := m.Succeed(cfg.Clock()); err != nil {
+			return failRun(cfg, res, "run_error", err)
+		}
+		if err := persistManifest(cfg); err != nil {
+			return failRun(cfg, res, "run_error", err)
+		}
+	}
+	// Resume: if every planned stage ended up succeeded or skipped (in
+	// particular when the final planned stage was already complete before
+	// this cycle), complete the run now, as a fresh run would have.
+	if cfg.Resume && m.Status == run.RunStatusRunning {
 		if err := m.Succeed(cfg.Clock()); err != nil {
 			return failRun(cfg, res, "run_error", err)
 		}
@@ -409,9 +528,10 @@ func cancelRun(ctx context.Context, cfg Config, res *Result, stageName run.Stage
 	return res, res.Err
 }
 
-// validateStageConfig checks that the stage executors line up with the
-// manifest's stage plan.
-func validateStageConfig(m *run.Manifest, stages []Stage) error {
+// ValidateStageConfig checks that the stage executors line up with the
+// manifest's stage plan: one entry per planned stage, in plan order, with an
+// executor or a skip reason.
+func ValidateStageConfig(m *run.Manifest, stages []Stage) error {
 	if len(stages) != len(m.Stages) {
 		return fmt.Errorf("runner: expected %d stage executors (one per planned stage), got %d", len(m.Stages), len(stages))
 	}
