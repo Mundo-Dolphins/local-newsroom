@@ -23,12 +23,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Setup GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install gh -y
+      # gh CLI is preinstalled on the ubuntu-latest runner (authenticated via GH_TOKEN)
 
       - name: Analyze PR and update branch if needed
         id: analyze
