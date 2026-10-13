@@ -33,53 +33,64 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           PR="$PR_NUMBER"
-          URL="$PR_URL"
           
-          # Fetch comprehensive PR state
+          echo "gh version: $(gh --version | head -1)"
           echo "=== Fetching PR $PR state ==="
           
-          # Get PR details including mergeability and behind status
-          PR_DATA=$(gh pr view "$PR" --json state,mergeable,headRefName,baseRefName,baselineCommit,commitHeadline,databaseId,url,commitsBeforeMergeHead,commitsBeforeMergeBase --jq '.')
+          # Only long-stable --json fields: the preinstalled gh on the runner is
+          # older than the one previously installed via apt, so newer fields
+          # (baselineCommit, commitHeadline, commitsBeforeMergeBase, databaseId)
+          # must not be requested - older versions reject them outright.
+          PR_DATA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,mergeable,headRefName,baseRefName,url --jq '.')
           
           STATE=$(echo "$PR_DATA" | jq -r '.state')
           MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')
           HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
           BASE_REF=$(echo "$PR_DATA" | jq -r '.baseRefName')
-          COMMITS_BEHIND=$(echo "$PR_DATA" | jq -r '.commitsBeforeMergeBase // empty')
           
           echo "PR State: $STATE"
-          echo "Mergeable: $MERGEABLE"
+          echo "Mergeable: $MERGEABLE (enum: MERGEABLE|CONFLICTING|UNKNOWN)"
           echo "Head: $HEAD_REF"
           echo "Base: $BASE_REF"
+          
+          # Detect staleness via the REST compare API (works on any gh version):
+          # behind_by = commits in the base branch that are not in the PR head.
+          # Branch names are used (not OIDs) so GitHub resolves live branch tips
+          # server-side; the PR's recorded baseRefOid can lag behind the real base.
+          COMMITS_BEHIND=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_REF...$HEAD_REF" --jq '.behind_by' 2>/dev/null || echo 0)
           echo "Commits behind: ${COMMITS_BEHIND:-0}"
           
-          # Determine state using clear state machine
-          # State definitions:
-          # - CURRENT: PR is mergeable (up to date and no conflicts)
-          # - BEHIND: PR branch has commits from base but is mergeable (behind but can be updated cleanly)
-          # - CONFLICTING: PR.mergeable == false (actual merge conflicts)
-          # - UNKNOWN: Other edge cases (e.g., draft, too many remote heads, etc.)
-          
-          if [ "$MERGEABLE" = "true" ]; then
-            echo "=== State: CURRENT ==="
-            echo "PR is mergeable - proceeding to auto-merge"
-            echo "ACTION=ENABLE_AUTOMERGE"
-          elif [ -n "$COMMITS_BEHIND" ] && [ "$COMMITS_BEHIND" != "null" ] && [ "$COMMITS_BEHIND" != "0" ]; then
-            echo "=== State: BEHIND ==="
-            echo "PR branch is behind base by $COMMITS_BEHIND commits but may be mergeable"
-            echo "ACTION=UPDATE_BRANCH"
-          elif [ "$MERGEABLE" = "false" ]; then
+          # State machine. Note: gh outputs the mergeable *enum*, not a boolean.
+          # - CURRENT:     mergeable and up to date           -> enable auto-merge
+          # - BEHIND:      mergeable (or pending) but stale   -> rebase branch
+          # - CONFLICTING: merge conflicts                    -> ask bot to rebase
+          # - UNKNOWN:     mergeability pending, up to date   -> skip
+          if [ "$MERGEABLE" = "MERGEABLE" ] || [ "$MERGEABLE" = "UNKNOWN" ]; then
+            if [ "${COMMITS_BEHIND:-0}" -gt 0 ] 2>/dev/null; then
+              echo "=== State: BEHIND ==="
+              echo "Base branch is ahead of PR head by $COMMITS_BEHIND commits - will rebase"
+              PR_ANALYSIS_STATE=BEHIND
+            elif [ "$MERGEABLE" = "MERGEABLE" ]; then
+              echo "=== State: CURRENT ==="
+              echo "PR is mergeable and up to date - proceeding to auto-merge"
+              PR_ANALYSIS_STATE=CURRENT
+            else
+              echo "=== State: UNKNOWN ==="
+              echo "PR mergeability is pending but branch is up to date - skipping"
+              PR_ANALYSIS_STATE=UNKNOWN
+            fi
+          elif [ "$MERGEABLE" = "CONFLICTING" ]; then
             echo "=== State: CONFLICTING ==="
             echo "PR has merge conflicts"
-            echo "ACTION=REQUEST_REBASE"
+            PR_ANALYSIS_STATE=CONFLICTING
           else
             echo "=== State: UNKNOWN ==="
-            echo "Cannot determine PR state reliably"
-            echo "ACTION=SKIP"
+            echo "Cannot determine PR state reliably (mergeable: $MERGEABLE)"
+            PR_ANALYSIS_STATE=UNKNOWN
           fi
           
-          # Record decision for next step
-          echo "PR_ANALYSIS_STATE=$(echo "$PR_DATA" | jq -r '.mergeable == "true" && "CURRENT" or (.commitsBeforeMergeBase != null and .commitsBeforeMergeBase != "0" and .commitsBeforeMergeBase != "null") && "BEHIND" or (.mergeable == "false") && "CONFLICTING" or "UNKNOWN")' >> $GITHUB_OUTPUT
+          # Record decision for next steps
+          echo "PR_ANALYSIS_STATE=$PR_ANALYSIS_STATE" >> $GITHUB_OUTPUT
 
       - name: Update branch if behind
         if: steps.analyze.outputs.PR_ANALYSIS_STATE == 'BEHIND'
@@ -94,35 +105,41 @@ jobs:
           
           # Attempt to update branch using gh pr update-branch --rebase
           # This does NOT resolve conflicts, only rebases if possible
-          if gh pr update-branch "$PR" --rebase 2>&1 | tee /tmp/gh-update.log; then
+          if gh pr update-branch "$PR" --repo "$GITHUB_REPOSITORY" --rebase 2>&1 | tee /tmp/gh-update.log; then
             echo "Branch update command succeeded"
             
             # Verify the update by re-fetching PR state
             sleep 3
             
-            NEW_MERGEABLE=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+            NEW_MERGEABLE=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json mergeable --jq '.mergeable')
             echo "After update, mergeable status: $NEW_MERGEABLE"
             
-            if [ "$NEW_MERGEABLE" = "true" ]; then
+            if [ "$NEW_MERGEABLE" = "MERGEABLE" ]; then
               echo "Branch update succeeded - PR is now current"
-              echo "SET_STATE=CURRENT"
+              echo "SET_STATE=CURRENT" >> $GITHUB_OUTPUT
+            elif [ "$NEW_MERGEABLE" = "CONFLICTING" ]; then
+              echo "Branch update completed but PR has conflicts"
+              echo "SET_STATE=CONFLICTING" >> $GITHUB_OUTPUT
             else
-              echo "Branch update completed but PR still shows as non-mergeable"
-              echo "SET_STATE=CONFLICTING"
+              echo "Mergeability still pending ($NEW_MERGEABLE) - will re-analyze on next synchronize"
+              echo "SET_STATE=UNKNOWN" >> $GITHUB_OUTPUT
             fi
           else
             echo "Branch update failed - checking reason..."
             
             # Re-check state after failed update attempt
-            MERGEABLE_AFTER=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+            MERGEABLE_AFTER=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json mergeable --jq '.mergeable')
             echo "Mergeable status after failed update: $MERGEABLE_AFTER"
             
-            if [ "$MERGEABLE_AFTER" = "false" ]; then
-              echo "PR still has conflicts"
-              echo "SET_STATE=CONFLICTING"
+            if [ "$MERGEABLE_AFTER" = "CONFLICTING" ]; then
+              echo "PR has conflicts"
+              echo "SET_STATE=CONFLICTING" >> $GITHUB_OUTPUT
+            elif [ "$MERGEABLE_AFTER" = "MERGEABLE" ]; then
+              echo "PR is current despite failed update attempt"
+              echo "SET_STATE=CURRENT" >> $GITHUB_OUTPUT
             else
-              echo "PR state unclear after update - assuming current"
-              echo "SET_STATE=CURRENT"
+              echo "PR state unclear after failed update ($MERGEABLE_AFTER)"
+              echo "SET_STATE=UNKNOWN" >> $GITHUB_OUTPUT
             fi
           fi
 
@@ -144,7 +161,7 @@ jobs:
             echo "Dependabot PR detected. Posting @dependabot rebase request..."
             
             # Use gh pr comment to post the rebase request
-            if gh pr comment "$PR" --body "@dependabot rebase" 2>&1; then
+            if gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "@dependabot rebase" 2>&1; then
               echo "Successfully posted @dependabot rebase request"
             else
               echo "Warning: Failed to post @dependabot rebase request"
@@ -154,7 +171,7 @@ jobs:
           elif [[ "$USER" == "renovate[bot]" ]]; then
             echo "Renovate PR detected. Posting @renovate regenerate request..."
             
-            if gh pr comment "$PR" --body "@renovate regenerate" 2>&1; then
+            if gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "@renovate regenerate" 2>&1; then
               echo "Successfully posted @renovate regenerate request"
             else
               echo "Warning: Failed to post @renovate regenerate request"
@@ -178,13 +195,13 @@ jobs:
           echo "=== Enabling auto-merge ==="
           
           # Final verification before enabling auto-merge
-          FINAL_STATE=$(gh pr view "$PR" --json state,mergeable --jq '.state')
-          FINAL_MERGEABLE=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+          FINAL_STATE=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,mergeable --jq '.state')
+          FINAL_MERGEABLE=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json mergeable --jq '.mergeable')
           
           echo "Final PR state: $FINAL_STATE"
           echo "Final mergeable status: $FINAL_MERGEABLE"
           
-          if [ "$FINAL_MERGEABLE" = "true" ] && [ "$FINAL_STATE" = "OPEN" ]; then
+          if [ "$FINAL_MERGEABLE" = "MERGEABLE" ] && [ "$FINAL_STATE" = "OPEN" ]; then
             echo "PR is mergeable and open. Enabling auto-merge..."
             
             # Enable squash auto-merge
@@ -195,7 +212,7 @@ jobs:
               echo "Warning: Failed to enable auto-merge"
               echo "PR may have become unmergeable between checks"
             fi
-          elif [ "$FINAL_MERGEABLE" = "false" ]; then
+          elif [ "$FINAL_MERGEABLE" = "CONFLICTING" ]; then
             echo "PR is not mergeable (conflicts). Auto-merge skipped."
             echo "Dependabot/renovate has been requested to rebase."
           else
