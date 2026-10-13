@@ -84,11 +84,9 @@ jobs:
         run: make tools
         continue-on-error: true
 
-      # Run all quality gates (exclude coverage since tests don't cover source code yet)
+      # Run all quality gates, including the coverage threshold gate (COVER_MIN)
       - name: Run quality gates
-        run: |
-          make check
-          make coverage
+        run: make check
 
       # Upload coverage artifacts
       - name: Upload coverage

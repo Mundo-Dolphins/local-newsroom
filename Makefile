@@ -5,11 +5,11 @@
 #     make fmt             gofmt the whole module
 #     make vet             Run go vet over ./...
 #     make test            Run the full Go test suite
-#     make coverage        Run tests with coverage (report only, no check)
+#     make coverage        Run tests with coverage, enforce COVER_MIN total coverage
 #     make lint            Run golangci-lint over ./...
 #     make security        Run gosec over ./...
 #     make build           Build the newsroom CLI into dist/
-#     make check           Run every quality gate (fmt vet test lint security build)
+#     make check           Run every quality gate (fmt vet coverage lint security build)
 #     make clean           Remove build and coverage artifacts
 #
 
@@ -32,6 +32,8 @@ GOSSEC_PKG = github.com/securego/gosec/v2/cmd/gosec
 DIST_DIR = $(CURDIR)/dist
 COVERAGE_OUT = $(CURDIR)/coverage.out
 
+# Minimum required total (repository-wide) test coverage, in percent.
+# Supports decimals, e.g. COVER_MIN=82.5. Enforced by `make coverage`.
 COVER_MIN ?= 80
 
 .PHONY: help fmt vet test coverage lint security build check tools clean
@@ -65,6 +67,20 @@ test:
 coverage:
 	@$(GO) test -coverprofile="$(COVERAGE_OUT)" ./...
 	@echo "Coverage report generated: $(COVERAGE_OUT)"
+	@COVERAGE_PCT=$$(LC_ALL=C $(GO) tool cover -func="$(COVERAGE_OUT)" | LC_ALL=C awk '/^total:/ {gsub(/%/, "", $$3); print $$3}'); \
+	if [ -z "$$COVERAGE_PCT" ]; then \
+		echo "ERROR: could not determine total coverage from $(COVERAGE_OUT)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_PCT=$$(LC_ALL=C awk -v min="$(COVER_MIN)" 'BEGIN { printf "%.1f", min }'); \
+	echo "Total coverage: $${COVERAGE_PCT}%"; \
+	echo "Required minimum: $${REQUIRED_PCT}%"; \
+	if LC_ALL=C awk -v pct="$$COVERAGE_PCT" -v min="$(COVER_MIN)" 'BEGIN { exit !(pct + 0 >= min + 0) }'; then \
+		echo "Coverage requirement satisfied"; \
+	else \
+		echo "ERROR: coverage is below the required threshold"; \
+		exit 1; \
+	fi
 	@echo "View with: go tool cover -func=$(COVERAGE_OUT)"
 
 lint: $(GOLANGCI_LINT)
@@ -92,7 +108,7 @@ build:
 
 # ---- Quality gate ---------------------------------------------------------------
 
-check: fmt vet test lint security build
+check: fmt vet coverage lint security build
 
 # ---- Help ------------------------------------------------------------------------
 
@@ -103,11 +119,11 @@ help:
 	@echo "  fmt        - Format Go code with gofmt"
 	@echo "  vet        - Run go vet over all packages"
 	@echo "  test       - Run the full Go test suite"
-	@echo "  coverage   - Run tests with coverage (report only)"
+	@echo "  coverage   - Run tests with coverage, enforce COVER_MIN threshold"
 	@echo "  lint       - Run golangci-lint over all packages"
 	@echo "  security   - Run gosec over all packages"
 	@echo "  build      - Build the newsroom CLI into dist/"
-	@echo "  check      - Run all quality gates (fmt vet test lint security build)"
+	@echo "  check      - Run all quality gates (fmt vet coverage lint security build)"
 	@echo "  clean      - Remove build and coverage artifacts"
 
 # ---- Clean ----------------------------------------------------------------------

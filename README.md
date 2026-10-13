@@ -54,6 +54,22 @@ llm:
 values, even if the referenced variable is set. A config file containing a
 literal key value is rejected.
 
+local-newsroom **never intentionally persists credentials**. Every file a run
+persists to the workspace — manifests, search plans, discovery results,
+fetched source pages and normalized documents, dossiers, verification
+results, editorial artifacts, final-check results, review bundles, rendered
+output, warnings/errors, and attempt history — is sanitized by a single
+redaction boundary in the workspace store *before* it reaches disk: resolved
+API keys are replaced exactly wherever they appear, and pattern detectors
+(bearer tokens, basic-auth tokens, PEM private-key blocks, assignments to
+secret-like keys, URL credentials, high-entropy token runs) cover the rest.
+If a fetched page or document contains a detected secret, the persisted copy
+is redacted and a sidecar (`<path>.redaction.json`) records the redaction
+(`redacted: true` and the replacement count); source fidelity may therefore
+be reduced by redaction, and a sanitized copy is all that exists on disk.
+Sanitization fails closed: content that still contains a detected secret is
+not written, and the error never includes the secret itself.
+
 ### The `config` command
 
 ```bash

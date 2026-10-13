@@ -833,6 +833,11 @@ func NewManifest(p NewManifestParams) (*Manifest, error) {
 	if len(p.Topic) > maxTopicLen {
 		return nil, fmt.Errorf("topic exceeds %d characters", maxTopicLen)
 	}
+	// Redact the topic at the door, exactly like every other free-text value
+	// (config values, error messages, skip reasons): a detected secret in
+	// the topic must never be recorded. The run ID derives from the redacted
+	// form so re-derivation stays stable.
+	p.Topic = RedactSecrets(p.Topic)
 	if len(p.Stages) == 0 {
 		p.Stages = CanonicalStages()
 	}
@@ -961,6 +966,9 @@ func (m *Manifest) Validate() error {
 	}
 	if len(m.Topic) > maxTopicLen {
 		addf("topic exceeds %d characters", maxTopicLen)
+	}
+	if m.Topic != "" && LooksLikeSecret(m.Topic) {
+		addf("topic contains secret-looking material; redact it before recording")
 	}
 	if !m.SourceMode.Valid() {
 		addf("invalid source mode %q", m.SourceMode)

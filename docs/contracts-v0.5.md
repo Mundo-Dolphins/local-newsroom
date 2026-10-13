@@ -14,7 +14,8 @@ The contract is implemented in the [`internal/run`](../internal/run/) package:
 | `status.go` | `RunStatus`, `StageStatus`, `AttemptStatus` rules, canonical stage list, transition validators |
 | `stage.go` | `StageRecord`, `StageAttempt` + validation |
 | `timestamp.go` | `Timestamp` (UTC, RFC 3339 nano) |
-| `redact.go` | `RedactSecrets`, `LooksLikeSecret`, `IsSecretKey`, `RedactedPlaceholder` |
+| `redact.go` | `RedactSecrets`, `RedactSecretsCounted`, `LooksLikeSecret`, `IsSecretKey`, `RedactedPlaceholder` |
+| `sanitizer.go` | `Sanitizer`, `NewSanitizer` — the single redaction boundary (exact configured values + pattern detectors) |
 
 Related documents:
 
@@ -51,7 +52,7 @@ Related documents:
 1. **Reproducible.** The manifest records everything needed to explain a run: workspace, topic, source mode, profile, model/endpoint, redacted config, stage plan, attempts, artifacts, and timing.
 2. **Inspectable.** One JSON document, one run. Stable IDs and deterministic stage names make runs queryable and diffable.
 3. **Resumable (later).** The manifest is the source of truth for run state. v0.5 ships the contract and in-memory lifecycle only; filesystem persistence and resume logic build on it in v0.6.
-4. **Honest.** Error messages, warnings, and config values are redacted; credentials never appear in the manifest.
+4. **Honest, and secret-free at every persistence boundary.** Error messages, warnings, and config values are redacted; credentials never appear in the manifest. local-newsroom never intentionally persists credentials: the workspace store (the persistence layer) sanitizes every byte that crosses the persistence boundary — every artifact of every kind, source and document content included, and the manifest — before it reaches disk. This policy deliberately overrides byte-identical source preservation: a source or document that contains a detected secret is persisted redacted, with redaction metadata, and source fidelity may be reduced by redaction. See [Redaction](#12-redaction) for the boundary contract.
 5. **Not every run runs everything.** A run plans an ordered subset of the canonical stages; the plan is part of the manifest.
 6. **Versioned.** `schema_version` is a semantic version string. Consumers reject unknown major versions and ignore unknown fields within a major.
 
@@ -284,6 +285,7 @@ Rules:
 - IDs are unique per run.
 - The referenced stage must be planned and must not be `pending` or `skipped` (it cannot have produced anything).
 - Paths must be non-traversing. The manifest references artifacts by path — it never embeds content.
+- **Content is sanitized at the persistence boundary.** Artifact *content* is not part of the manifest contract, but it is persisted by the workspace store, which sanitizes every artifact — including fetched `source` and `document` content — before writing. A source or document that contained a detected secret is persisted redacted, with a redaction metadata sidecar (`<path>.redaction.json` recording `redacted` and `redaction_count`) next to it. There is no verbatim exception. Readers of persisted content (after a restart or not) always observe the sanitized representation; exact-byte reconstruction of redacted content is deliberately impossible.
 
 ### Warning and ErrorSummary
 
@@ -402,18 +404,78 @@ Future schema changes: bump the patch/minor and update the JSON Schema and this 
 
 ## 12. Redaction
 
-The manifest must be shareable. `redact.go` provides:
+Redaction has two layers: the **pattern detectors** in `redact.go` and the **
+exact-value sanitizer** in `sanitizer.go` (`Sanitizer` / `NewSanitizer`).
+`redact.go` provides:
 
 - `RedactedPlaceholder` = `[REDACTED]` — the only representation of a secret. The placeholder is idempotent: it never matches the detectors, so redacting twice is a no-op.
 - `IsSecretKey(key)` — true for keys whose normalized form (separators as spaces, camelCase split) ends in a secret-like word: `key`, `token`, `secret`, `password`, `passwd`, `credential`, `apikey`, `auth`, `cookie`, or forms like `access_token` / `api_key` / `session_token`.
 - `RedactSecrets(s)` replaces:
   - `Authorization: Bearer <token>` headers;
+  - `Authorization: Basic <token>` values;
+  - PEM private-key blocks (`-----BEGIN [RSA |EC |…]PRIVATE KEY-----` … `-----END … PRIVATE KEY-----`, whole block — public keys are untouched);
   - assignments to secret-like keys (`token = abc…`, `apiKey: "…"`);
   - URL userinfo (`https://user:pass@host`);
   - secret-like URL query parameters (`?api_key=…`);
-  - long high-entropy token runs (≥ 32 chars, ≥ 3 character classes, Shannon entropy ≥ 4.5) — without redacting ordinary prose or hex IDs.
-- `LooksLikeSecret(s)` — `RedactSecrets(s) != s`. Used to validate stored strings.
+  - long high-entropy token runs (≥ 32 chars, ≥ 3 character classes, Shannon entropy ≥ 4.5) — without redacting ordinary prose or hex IDs. The run class excludes `/` (a path separator): a filesystem path must not read as one token, while slash-bearing credentials in their realistic forms (Bearer, assignments, URL queries, PEM) are covered by the dedicated detectors.
+- `RedactSecretsCounted(s)` — `RedactSecrets` plus the number of replacements, for redaction records. The count is stable: applying the function to its own output performs zero further replacements.
+- `LooksLikeSecret(s)` — `RedactSecrets(s) != s`. Used to validate stored strings (topic, config values, notes, endpoints).
 - `NewModelMetadata` redacts endpoints before storing them.
+
+`sanitizer.go` provides the **Sanitizer**, the single redaction boundary
+that data must cross before it is persisted:
+
+- `NewSanitizer(values...)` — registers exact secret values known at runtime
+  (the resolved `OMLX_API_KEY`, `SEARXNG_API_KEY`, `EMBEDDING_API_KEY`, via
+  `config.Config.SecretValues`). A nil or zero-value `*Sanitizer` is the
+  pattern-only default.
+- `Sanitize(text)` / `SanitizeBytes(data)` — exact-value replacement (the
+  only detection that applies to binary content) followed by the pattern
+  detectors (text content only), returning sanitized output and a replacement
+  count. The result never contains the original secret values, and redaction
+  is idempotent.
+- `CleanText` / `CleanBytes` — the final gate after sanitization: content
+  that is not clean is a sanitization failure and must not be written
+  (fail closed).
+
+### The persistence boundary (workspace store)
+
+The workspace store is the final security boundary for all persisted run
+data, and it enforces the policy itself — callers never have to remember to
+redact their own structures:
+
+- **Every artifact** — manifests, search plans, discovery results, fetched
+  and normalized source/document content, dossiers, verification results,
+  editorial artifacts, final-check results, review bundles, rendered output,
+  warnings/errors, attempt history, custom artifacts — is sanitized by the
+  store's `run.Sanitizer` before any byte reaches disk (temporary files
+  included). There is no verbatim exception for source or document content.
+- When sanitization changes content, a sidecar file
+  (`<path>.redaction.json`) records `redacted: true` and the replacement
+  count — metadata only, never the redacted values. A clean write removes
+  any stale sidecar, so a sidecar's presence always means "the persisted
+  copy is a redacted representation".
+- **Fail closed.** If the sanitized bytes still contain a detected secret,
+  nothing is written: the store returns `workspace.ErrSanitization`, whose
+  message names the failure without including any secret material.
+- **Binary content** (not valid UTF-8, or containing NUL bytes) receives
+  exact-value byte replacement only; the pattern detectors are defined for
+  text, so binary blobs without a configured exact value pass through
+  unchanged — the only content class that may cross the boundary unmodified.
+- **The manifest** is validated in full (free-text fields are pattern-checked
+  individually) and additionally gated byte-for-byte against every configured
+  exact secret value; a manifest that still contains one is refused
+  (`ErrManifestInvalid`) and never silently rewritten. The gate uses exact
+  values rather than the pattern heuristics because patterns can
+  false-positive on benign structured strings (filesystem paths, generated
+  run IDs).
+- **Verification/reload contract.** During an active run, in-memory originals
+  remain available to the producing stage. Stages and tools that read
+  persisted content (`LoadArtifact`, after a restart or not) always observe
+  the sanitized representation. Exact-byte reconstruction of redacted content
+  after a restart is deliberately impossible — the accepted trade-off of the
+  no-secret persistence guarantee, in place of byte-identical raw source
+  fidelity.
 
 ---
 
