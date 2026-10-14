@@ -20,6 +20,7 @@ The contract is implemented in the [`internal/run`](../internal/run/) package:
 Related documents:
 
 - [`contracts-v0.4.md`](contracts-v0.4.md) — per-stage data contracts (unchanged in v0.5)
+- [`tui-v0.5.md`](tui-v0.5.md) — the keyboard-first TUI that renders these manifests
 - [`workflow-v0.2.md`](workflow-v0.2.md) — pipeline and stages
 - [`pipeline-flow.md`](pipeline-flow.md) — pipeline flow overview
 - [`JSON-Schema-Validation-Strategy.md`](JSON-Schema-Validation-Strategy.md) — why JSON Schema is not the primary gate
