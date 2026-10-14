@@ -3,6 +3,18 @@
 Local-first AI newsroom for researching, verifying and writing content with
 local LLMs.
 
+## First usable workflow
+
+From a fresh machine to a reviewed article in eight steps: configure your
+oMLX endpoint (Mac Studio) and SearXNG endpoint (Raspberry Pi) in one config
+file, set your workspace/archive, create a writing profile, then launch with
+`newsroom run --topic "..."` or the TUI. Every run persists its full record
+to the workspace, is resumable after failure or interruption
+(`newsroom run --resume <id>`), and finishes with a human review bundle
+(`review.md`).
+
+Full operator guide: [`docs/first-usable-workflow.md`](docs/first-usable-workflow.md)
+
 ## Configuration
 
 All commands share a single YAML configuration file (v0.5+). Set it up once
