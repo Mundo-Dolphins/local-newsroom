@@ -524,6 +524,34 @@ The archive command includes comprehensive unit tests:
 - **Idempotency**: Verifies re-archiving same content produces same IDs
 - **Output formats**: Tests JSON and text output formats
 
+## TUI
+
+`newsroom tui` opens a keyboard-first terminal interface for daily work with
+the pipeline: browse recent runs, start new runs through a wizard (topic,
+profile, format, source mode, URLs), watch stage progress live, cancel or
+resume runs, retry a failed stage, and open artifacts in `$EDITOR`.
+
+```bash
+newsroom tui                 # recent runs for the default workspace
+newsroom tui --workspace myproject
+```
+
+- **Keyboard-first:** `j/k` select, `enter` open, `n` new run, `r` resume,
+  `t` retry stage, `c` cancel, `o` open artifact, `v` verbose, `?` key
+  reference, `q` quit. Cancellation and quit-while-running ask for
+  confirmation.
+- **Presentation layer only:** the TUI polls the run/workflow services
+  (`internal/tui` over a `Service` interface) and contains no pipeline logic;
+  a run started from the TUI produces the same manifest as `newsroom run`.
+- **Remote-friendly:** the TUI itself makes no network calls. Configure the
+  shared config (or `OMLX_BASE_URL` / `SEARXNG_BASE_URL`) to point at
+  wherever the LLM and search endpoints live — the header shows the resolved
+  endpoints, so remote targets are visible before a run starts.
+- **Terminal required:** piped invocations fail fast and point at
+  `newsroom run`, so scripts and CI keep using the CLI.
+
+Full reference: [`docs/tui-v0.5.md`](docs/tui-v0.5.md).
+
 ## Development commands
 
 The project's common development and quality-gate commands live in the root

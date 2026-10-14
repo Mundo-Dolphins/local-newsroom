@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -242,125 +240,6 @@ type runResolved struct {
 	quality          float64
 }
 
-// resolveRunConfig resolves every run setting through the configured chain.
-func resolveRunConfig(cmd *cobra.Command) (*runResolved, error) {
-	ov := func(flagName string) config.Override {
-		return runSettingOverride(cmd, flagName)
-	}
-	resolve := func(name string, o config.Override) (string, bool, error) {
-		return appConfig.GetString(name, o)
-	}
-	resolveInt := func(name string, o config.Override) (int, bool, error) {
-		return appConfig.GetInt(name, o)
-	}
-	resolveFloat := func(name string, o config.Override) (float64, bool, error) {
-		return appConfig.GetFloat(name, o)
-	}
-
-	r := &runResolved{}
-	var err error
-	if r.llmBaseURL, _, err = resolve(config.SettingLLMBaseURL, ov("llm-base-url")); err != nil {
-		return nil, err
-	}
-	if r.llmModel, _, err = resolve(config.SettingLLMModel, ov("llm-model")); err != nil {
-		return nil, err
-	}
-	if r.llmAPIKey, _, err = resolve(config.SettingLLMAPIKey, ov("llm-api-key")); err != nil {
-		return nil, err
-	}
-	if r.llmTimeout, _, err = resolveFloat(config.SettingLLMTimeout, ov("llm-timeout")); err != nil {
-		return nil, err
-	}
-
-	if r.searchBaseURL, _, err = resolve(config.SettingSearchBaseURL, ov("search-base-url")); err != nil {
-		return nil, err
-	}
-	searchLang, searchLangSet, err := resolve(config.SettingSearchLanguage, ov("search-language"))
-	if err != nil {
-		return nil, err
-	}
-	r.searchLanguage = searchLang
-	if r.searchTimeRange, _, err = resolve(config.SettingSearchTimeRange, ov("search-time-range")); err != nil {
-		return nil, err
-	}
-	if r.searchMaxQueries, _, err = resolveInt(config.SettingSearchMaxQueries, ov("search-max-queries")); err != nil {
-		return nil, err
-	}
-	if r.searchResults, _, err = resolveInt(config.SettingSearchResults, ov("search-results-per-query")); err != nil {
-		return nil, err
-	}
-	if r.maxSources, _, err = resolveInt(config.SettingSearchMaxSources, ov("max-sources")); err != nil {
-		return nil, err
-	}
-
-	if r.fetchTimeout, _, err = resolveFloat(config.SettingFetchTimeout, ov("fetch-timeout")); err != nil {
-		return nil, err
-	}
-	if r.fetchMaxSize, _, err = resolveInt(config.SettingFetchMaxSize, ov("fetch-max-size")); err != nil {
-		return nil, err
-	}
-	if r.fetchMaxWords, _, err = resolveInt(config.SettingFetchMaxWords, ov("fetch-max-words")); err != nil {
-		return nil, err
-	}
-
-	if r.archiveDB, r.archiveSet, err = resolve(config.SettingArchiveDBPath, ov("archive-db-path")); err != nil {
-		return nil, err
-	}
-	if r.archiveTopK, _, err = resolveInt(config.SettingArchiveTopK, ov("archive-top-k")); err != nil {
-		return nil, err
-	}
-
-	if r.profilesRoot, _, err = resolve(config.SettingProfilesRoot, ov("profile-root")); err != nil {
-		return nil, err
-	}
-	// The profiles.name setting carries a built-in default ("default"), so a
-	// resolved value alone cannot tell "the user chose a profile" from
-	// "nothing was configured": only a non-default source counts. Otherwise
-	// every run would require a profiles root just to read the default name.
-	profilesName, nameSource, err := appConfig.Resolve(config.SettingProfilesName, config.Override{})
-	if err != nil {
-		return nil, err
-	}
-	r.profilesName = profilesName
-	r.profilesNameSet = nameSource != "default" && nameSource != ""
-
-	if r.language, _, err = resolve(config.SettingDefaultsLanguage, ov("language")); err != nil {
-		return nil, err
-	}
-	if r.language == "" {
-		// The search language doubles as the generation language when no
-		// explicit language is configured.
-		r.language = r.searchLanguage
-	}
-	if r.temperature, _, err = resolveFloat(config.SettingTemperature, ov("temperature")); err != nil {
-		return nil, err
-	}
-	if r.temperature == 0 {
-		r.temperature = 0.3
-	}
-	if r.maxTokens, _, err = resolveInt(config.SettingMaxTokens, ov("max-tokens")); err != nil {
-		return nil, err
-	}
-	if r.maxTokens <= 0 {
-		r.maxTokens = 50000
-	}
-	if r.tone, _, err = resolve(config.SettingTone, ov("tone")); err != nil {
-		return nil, err
-	}
-	if r.format, _, err = resolve(config.SettingOutputFormat, ov("format")); err != nil {
-		return nil, err
-	}
-	if r.format == "" {
-		r.format = orchestrator.FormatArticle
-	}
-	r.quality = rf.quality
-	if r.quality <= 0 {
-		r.quality = orchestrator.DefaultQualityThreshold
-	}
-	_ = searchLangSet
-	return r, nil
-}
-
 // newLLMClient builds the shared OpenAI-compatible LLM client from the
 // resolved run settings.
 func (r *runResolved) newLLMClient() *llm.OpenAICompatClient {
@@ -395,193 +274,60 @@ func doRun(cmd *cobra.Command, _ []string) error {
 // the same way as for a new run so the re-executed stages use the same
 // services.
 func doRunResume(ctx context.Context, cmd *cobra.Command, id run.RunID) error {
-	resolved, err := resolveRunConfig(cmd)
-	if err != nil {
-		return err
-	}
-
+	overrides := buildRunOverrides(cmd)
 	root, err := filepath.Abs(rf.workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("resolving workspace root: %w", err)
 	}
-	overrides := buildRunOverrides(cmd)
-	store, err := workspace.NewStoreWithSanitizer(root, run.NewSanitizer(appConfig.SecretValues(overrides)...))
-	if err != nil {
-		return fmt.Errorf("creating workspace store: %w", err)
+	intent := runIntent{
+		ResumeID:    id,
+		Workspace:   run.Workspace{Path: root},
+		ProfileSpec: rf.profile,
 	}
-
-	// The manifest snapshot is the source of truth for what the run did:
-	// follow-up and archive services are (re)constructed only when the run
-	// originally used them, so a resume behaves like the original.
-	m, _, err := store.LoadManifest(id)
-	if err != nil {
-		return fmt.Errorf("loading run %s: %w", id, err)
-	}
-	followUpEnabled := false
-	if v, ok := m.Config.Get(orchestrator.SettingRunFollowUp); ok {
-		followUpEnabled, _ = strconv.ParseBool(v)
-	}
-	archiveEnabled := false
-	if v, ok := m.Config.Get(orchestrator.SettingRunArchiveEnabled); ok {
-		archiveEnabled, _ = strconv.ParseBool(v)
-	}
-	profileInst, err := loadRunProfileInstance(ctx, resolved.profilesRoot, resolved.profilesName, resolved.profilesNameSet)
-	if err != nil {
-		return fmt.Errorf("loading editorial profile for resume: %w", err)
-	}
-
-	orchCfg := orchestrator.Config{
-		Store:            store,
-		Format:           resolved.format,
-		MaxSources:       maxSourcesOrDefault(resolved.maxSources),
-		ArchiveTopK:      resolved.archiveTopK,
-		QualityThreshold: resolved.quality,
-	}
-	orchCfg, err = buildRunServices(ctx, orchCfg, serviceInputs{
-		llm:            resolved.newLLMClient(),
-		resolved:       resolved,
-		followUp:       followUpEnabled,
-		archiveEnabled: archiveEnabled,
-		profile:        profileInst,
-	})
+	plan, err := planRun(ctx, intent, overrides)
 	if err != nil {
 		return err
 	}
-
-	orch, err := orchestrator.New(orchCfg)
-	if err != nil {
-		return err
-	}
-	res, err := orch.ResumeID(ctx, id)
+	res, err := plan.Orch.ResumeID(ctx, id)
 	if res != nil && res.Manifest != nil {
-		printRunSummary(store, res.Manifest)
+		printRunSummary(plan.Store, res.Manifest)
 	}
 	return userFacingRunError(res, err)
 }
 
 // doRunNew creates and executes a new end-to-end run.
 func doRunNew(ctx context.Context, cmd *cobra.Command) error {
-	resolved, err := resolveRunConfig(cmd)
-	if err != nil {
-		return err
-	}
-	overrides := buildRunOverrides(cmd)
-
-	// --- Sources -----------------------------------------------------------
-	urls := dedupeURLs(rf.urls)
-	searchConfigured := resolved.searchBaseURL != ""
-	if len(urls) == 0 && !searchConfigured {
-		return errors.New("no sources configured: provide --url (repeatable) and/or --search-base-url (or SEARXNG_BASE_URL / search.base_url)")
-	}
-	mode := run.SourceModeDiscovered
-	if len(urls) > 0 && !searchConfigured {
-		mode = run.SourceModeExplicit
-	} else if len(urls) > 0 {
-		mode = run.SourceModeSupplement
-	}
-	if rf.followUp && !searchConfigured {
-		return errors.New("--follow-up requires search: follow-up research needs a search provider to find new sources (--search-base-url)")
-	}
-
-	// --- Editorial profile ---------------------------------------------------
-	profileRef, profileInst, err := loadRunProfile(ctx, resolved.profilesRoot, resolved.profilesName, resolved.profilesNameSet)
-	if err != nil {
-		return err
-	}
-
-	// --- Workspace, manifest -----------------------------------------------
 	root, err := filepath.Abs(rf.workspaceRoot)
 	if err != nil {
 		return fmt.Errorf("resolving workspace root: %w", err)
 	}
-	ws := run.Workspace{Name: rf.workspace, Path: root}
-	if err := ws.Validate(); err != nil {
-		return fmt.Errorf("invalid workspace name %q: %w", rf.workspace, err)
+	wsName := rf.workspace
+	if wsName == "" {
+		wsName = "default"
 	}
-	store, err := workspace.NewStoreWithSanitizer(root, run.NewSanitizer(appConfig.SecretValues(overrides)...))
+	intent := runIntent{
+		Topic:            rf.topic,
+		ProfileSpec:      rf.profile,
+		Format:           rf.format,
+		URLs:             rf.urls,
+		FollowUp:         rf.followUp,
+		QualityThreshold: rf.quality,
+		Workspace:        run.Workspace{Name: wsName, Path: root},
+	}
+	plan, err := planRun(ctx, intent, buildRunOverrides(cmd))
 	if err != nil {
-		return fmt.Errorf("creating workspace store: %w", err)
-	}
-
-	// The config snapshot makes the run reproducible: every run-level
-	// parameter the stages resolve (format, follow-up, language, thresholds,
-	// explicit URLs, archive, source bound) is recorded so a resumed run
-	// behaves exactly like the original one.
-	snap, err := appConfig.Snapshot(overrides)
-	if err != nil {
-		return fmt.Errorf("building config snapshot: %w", err)
-	}
-	archiveEnabled := resolved.archiveSet && resolved.archiveDB != ""
-	snapPairs := [][2]string{
-		{orchestrator.SettingRunFormat, resolved.format},
-		{orchestrator.SettingRunFollowUp, strconv.FormatBool(rf.followUp)},
-		{orchestrator.SettingRunLanguage, resolved.language},
-		{orchestrator.SettingRunQualityThresh, strconv.FormatFloat(resolved.quality, 'f', 1, 64)},
-		{orchestrator.SettingRunArchiveTopK, strconv.Itoa(resolved.archiveTopK)},
-		{orchestrator.SettingRunArchiveEnabled, strconv.FormatBool(archiveEnabled)},
-		{orchestrator.SettingRunMaxSources, strconv.Itoa(resolved.maxSources)},
-	}
-	for _, p := range snapPairs {
-		if err := snap.Set(p[0], p[1]); err != nil {
-			return fmt.Errorf("recording run parameter %s: %w", p[0], err)
-		}
-	}
-	if len(urls) > 0 {
-		if data, err := json.Marshal(urls); err == nil {
-			if err := snap.Set(orchestrator.SettingRunExplicitURLs, string(data)); err != nil {
-				return fmt.Errorf("recording explicit URLs: %w", err)
-			}
-		}
-	}
-
-	now := time.Now().UTC()
-	m, err := run.NewManifest(run.NewManifestParams{
-		Workspace:  ws,
-		Topic:      strings.TrimSpace(rf.topic),
-		SourceMode: mode,
-		Profile:    profileRef,
-		Model:      run.NewModelMetadata("omlx", resolved.llmModel, resolved.llmBaseURL),
-		Config:     snap,
-		Stages:     run.CanonicalStages(),
-		StartedAt:  now,
-	})
-	if err != nil {
-		return fmt.Errorf("creating run manifest: %w", err)
+		return err
 	}
 	// The runner claims the run directory and persists the initial manifest
 	// (CreateRun); the claim happens once, inside the run, so the command
 	// does not pre-create it (a double create is rejected by the store).
-	fmt.Fprintf(os.Stderr, "creating run %s in workspace %q (%s)\n", m.ID, m.Workspace.Name, root)
+	fmt.Fprintf(os.Stderr, "creating run %s in workspace %q (%s)\n", plan.Manifest.ID, plan.Manifest.Workspace.Name, root)
 
-	// --- Stage services -------------------------------------------------------
-	orchCfg := orchestrator.Config{
-		Store:            store,
-		Format:           resolved.format,
-		ExplicitURLs:     urls,
-		MaxSources:       maxSourcesOrDefault(resolved.maxSources),
-		ArchiveTopK:      resolved.archiveTopK,
-		QualityThreshold: resolved.quality,
-	}
-	orchCfg, err = buildRunServices(ctx, orchCfg, serviceInputs{
-		llm:            resolved.newLLMClient(),
-		resolved:       resolved,
-		followUp:       rf.followUp,
-		archiveEnabled: archiveEnabled,
-		profile:        profileInst,
-	})
-	if err != nil {
-		return err
-	}
-	orch, err := orchestrator.New(orchCfg)
-	if err != nil {
-		return err
-	}
-
-	res, err := orch.Run(ctx, m, false)
+	res, err := plan.Orch.Run(ctx, plan.Manifest, false)
 	if res == nil || res.Manifest == nil {
-		return fmt.Errorf("run %s: %w", m.ID, err)
+		return fmt.Errorf("run %s: %w", plan.Manifest.ID, err)
 	}
-	printRunSummary(store, res.Manifest)
+	printRunSummary(plan.Store, res.Manifest)
 	return userFacingRunError(res, err)
 }
 
@@ -722,68 +468,6 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 		)
 	}
 	return cfg, nil
-}
-
-// loadRunProfile resolves and loads the editorial profile for a run.
-//
-// The --profile flag takes precedence over the profiles.name setting; a
-// two-segment value (<publication>/<author>) selects a publication directory
-// under the profiles root, a one-segment value selects an author directly
-// under the root. When no profile is specified, (nil, nil, nil) is
-// returned.
-func loadRunProfile(ctx context.Context, root, name string, nameSet bool) (*run.Profile, profiles.Injector, error) {
-	spec := rf.profile
-	if spec == "" && nameSet {
-		spec = name
-	}
-	if spec == "" {
-		return nil, nil, nil
-	}
-	if root == "" {
-		return nil, nil, fmt.Errorf("profile %q needs a profiles root: pass --profile-root or set profiles.root (the flag, environment, or config file)", spec)
-	}
-
-	base := root
-	author := ""
-	if i := strings.LastIndex(spec, "/"); i >= 0 {
-		base = filepath.Join(root, spec[:i])
-		author = spec[i+1:]
-	} else {
-		author = spec
-	}
-	if author == "" {
-		return nil, nil, fmt.Errorf("invalid profile %q: expected <publication>/<author> or <author>", spec)
-	}
-
-	loader, err := profiles.NewLoader(profiles.Config{
-		BasePath:       base,
-		AuthorOverride: author,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading profile %q: %w", spec, err)
-	}
-	p, err := loader.Load(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading profile %q: %w", spec, err)
-	}
-
-	inst := profiles.NewInjector(p)
-	profileID := author
-	if i := strings.LastIndex(spec, "/"); i >= 0 {
-		profileID = spec[:i] + "." + author
-	}
-	return &run.Profile{
-		ID:         profileID,
-		SourcePath: base,
-		Hash:       profileHash(p),
-	}, inst, nil
-}
-
-// loadRunProfileInstance loads only the profile instance (used by the resume
-// path, which must not re-derive manifest metadata).
-func loadRunProfileInstance(ctx context.Context, root, name string, nameSet bool) (profiles.Injector, error) {
-	_, inst, err := loadRunProfile(ctx, root, name, nameSet)
-	return inst, err
 }
 
 // profileHash digests the merged profile content for reproducibility records.

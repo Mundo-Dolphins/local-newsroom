@@ -206,16 +206,13 @@ func TestLoadRunProfileAuthorOnly(t *testing.T) {
 	writeProfileTree(t, root, ".", "javi") // publication "." == root itself
 
 	// No profile configured at all: nothing is loaded.
-	ref, inst, err := loadRunProfile(context.Background(), root, "", false)
+	ref, inst, err := loadRunProfile(context.Background(), root, "", false, "")
 	if err != nil || ref != nil || inst != nil {
 		t.Fatalf("no spec should produce no profile: ref=%+v inst=%v err=%v", ref, inst, err)
 	}
 
 	// A bare author name maps onto the root itself.
-	old := rf.profile
-	rf.profile = "javi"
-	t.Cleanup(func() { rf.profile = old })
-	ref, inst, err = loadRunProfile(context.Background(), root, "", false)
+	ref, inst, err = loadRunProfile(context.Background(), root, "", false, "javi")
 	if err != nil {
 		t.Fatalf("author-only profile: %v", err)
 	}
