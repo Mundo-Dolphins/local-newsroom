@@ -23,6 +23,7 @@ package writer
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,9 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 )
+
+//go:embed prompts/*.prompt
+var writerPromptsFS embed.FS
 
 // Writer produces an EditorialArtifact from a VerificationResult.
 //
@@ -95,8 +99,10 @@ type WriterConfig struct {
 
 // New creates a new Writer with the given LLM client.
 //
-// The prompt template is loaded from prompts/writer.prompt via go:embed
-// unless PromptOverride is specified in config.
+// The prompt template is resolved in order: the config PromptOverride, the
+// on-disk prompts/writer.prompt (relative to the working directory, so a
+// source checkout keeps the user-customizable file), and finally the
+// embedded copy (so an installed binary works from any directory).
 func New(client llm.Client, model string, config WriterConfig) (*Writer, error) {
 	if client == nil {
 		return nil, errors.New("llm.Client must not be nil")
@@ -105,10 +111,12 @@ func New(client llm.Client, model string, config WriterConfig) (*Writer, error) 
 	// Load the prompt template
 	prompt := config.PromptOverride
 	if prompt == "" {
-		// Read prompt from root prompts directory
 		promptBytes, err := os.ReadFile(filepath.Join("..", "..", "prompts", "writer.prompt"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read prompt template: %w", err)
+			promptBytes, err = writerPromptsFS.ReadFile("prompts/writer.prompt")
+			if err != nil {
+				return nil, fmt.Errorf("failed to read prompt template: %w", err)
+			}
 		}
 		prompt = string(promptBytes)
 	}

@@ -21,6 +21,7 @@ package finalchecker
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,9 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
 )
+
+//go:embed prompts/*.prompt
+var finalCheckerPromptsFS embed.FS
 
 // FinalFactualChecker verifies factual consistency between an EditorialArtifact
 // and its source VerificationResult.
@@ -77,8 +81,10 @@ type CheckerConfig struct {
 
 // New creates a new FinalFactualChecker with the given LLM client.
 //
-// The prompt template is loaded from prompts/final-checker.prompt via go:embed
-// unless PromptOverride is specified in config.
+// The prompt template is resolved in order: the config PromptOverride, the
+// on-disk prompts/final-checker.prompt (relative to the working directory, so
+// a source checkout keeps the user-customizable file), and finally the
+// embedded copy (so an installed binary works from any directory).
 func New(client llm.Client, model string, config CheckerConfig) (*FinalFactualChecker, error) {
 	if client == nil {
 		return nil, errors.New("llm.Client must not be nil")
@@ -87,10 +93,12 @@ func New(client llm.Client, model string, config CheckerConfig) (*FinalFactualCh
 	// Load the prompt template
 	prompt := config.PromptOverride
 	if prompt == "" {
-		// Read prompt from root prompts directory
 		promptBytes, err := os.ReadFile(filepath.Join("..", "..", "prompts", "final-checker.prompt"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read prompt template: %w", err)
+			promptBytes, err = finalCheckerPromptsFS.ReadFile("prompts/final-checker.prompt")
+			if err != nil {
+				return nil, fmt.Errorf("failed to read prompt template: %w", err)
+			}
 		}
 		prompt = string(promptBytes)
 	}
