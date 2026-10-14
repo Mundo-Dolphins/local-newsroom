@@ -34,6 +34,8 @@ Related documents:
   TUI renders)
 - [`v04-editorial-pipeline.md`](v04-editorial-pipeline.md) — pipeline and
   stages
+- [`review-bundle-v0.5.md`](review-bundle-v0.5.md) — the `review.md` every
+  finished run gets (the TUI attaches it when a cycle completes)
 
 ---
 
@@ -215,6 +217,7 @@ per-run flags with the profile selector, format, source mode, and URLs.
 | Per-run overrides | full flag set | configuration chain only |
 | Resume / retry | `--resume` / `--retry-stage` flags | `r` / `t` keys |
 | Live progress | none (run to completion) | polling while in flight |
+| Review bundle | attached after the run; a pointer prints to stderr | attached when the cycle reaches its terminal state (silently — open it with `newsroom review <id>`) |
 | Use case | scripts, CI, automation | daily desk work |
 
 Both entry points share `planRun`, so pipeline behavior — stage execution,
@@ -246,6 +249,7 @@ inputs.
 | `internal/tui/view_test.go` | rendering and text-helper tests |
 | `cmd/newsroom/tui_cmd.go` | `tui` cobra command, `tuiApp` (concrete `Service`), TTY guard, tea program wiring, graceful shutdown |
 | `cmd/newsroom/tui_cmd_test.go` | TTY guard, DTO mapping, service-method tests (including a full fake-pipeline run) |
+| `cmd/newsroom/tui_review_test.go` | review-bundle attachment for terminal runs |
 | `cmd/newsroom/run_plan.go` | shared `planRun` wiring used by both `run` and `tui` |
 
 ## 9. Testing

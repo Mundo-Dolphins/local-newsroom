@@ -19,6 +19,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/resume"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/review"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/tui"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/workspace"
@@ -347,6 +348,7 @@ func (a *tuiApp) beginCycle(ctx context.Context, plan *runPlan, work func() (str
 		defer close(a.runDone)
 		defer cancel()
 		id, ok, _ := work()
+		a.attachReviewBundle(run.RunID(id))
 		a.mu.Lock()
 		if a.runningID == id || id == "" {
 			a.runningID = ""
@@ -355,6 +357,31 @@ func (a *tuiApp) beginCycle(ctx context.Context, plan *runPlan, work func() (str
 		_ = ok
 	}()
 	return nil
+}
+
+// attachReviewBundle is the TUI-side twin of writeReviewBundle: runs started
+// from the TUI finish in the same workspace, so they get the same review.md.
+// The TUI owns the terminal, so there is no warning channel: a bundle that
+// cannot be built or written is silently skipped (the run's own record is
+// untouched, and `newsroom review <id>` can regenerate it any time).
+func (a *tuiApp) attachReviewBundle(id run.RunID) {
+	if id == "" {
+		return
+	}
+	m, _, err := a.store.LoadManifest(id)
+	if err != nil || m == nil {
+		return
+	}
+	switch m.Status {
+	case run.RunStatusSucceeded, run.RunStatusFailed, run.RunStatusCancelled:
+	default:
+		return
+	}
+	b, err := review.Build(a.store, m)
+	if err != nil {
+		return
+	}
+	_, _ = review.Save(a.store, b)
 }
 
 // Cancel implements tui.Service.

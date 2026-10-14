@@ -134,7 +134,7 @@ func resetAllCLIFlags(t *testing.T) {
 	t.Helper()
 	resetFlags(t, rootCmd, researchCmd, verifyCmd, writeCmd, finalCheckCmd,
 		archiveCmd, addCmd, searchCmd, statsCmd, configCmd, configShowCmd, configValidateCmd, helpCmd,
-		runCmd, tuiCmd)
+		runCmd, tuiCmd, reviewCmd)
 
 	// pflag slice flags (e.g. --url) accumulate values on repeated Set() calls
 	// once a flag has been changed, so DefValue resets do not clear them.
