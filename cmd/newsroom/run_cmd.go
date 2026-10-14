@@ -32,6 +32,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/renderers"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/review"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/search/searxng"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/verifier"
@@ -291,6 +292,7 @@ func doRunResume(ctx context.Context, cmd *cobra.Command, id run.RunID) error {
 	res, err := plan.Orch.ResumeID(ctx, id)
 	if res != nil && res.Manifest != nil {
 		printRunSummary(plan.Store, res.Manifest)
+		writeReviewBundle(plan.Store, res.Manifest)
 	}
 	return userFacingRunError(res, err)
 }
@@ -328,6 +330,7 @@ func doRunNew(ctx context.Context, cmd *cobra.Command) error {
 		return fmt.Errorf("run %s: %w", plan.Manifest.ID, err)
 	}
 	printRunSummary(plan.Store, res.Manifest)
+	writeReviewBundle(plan.Store, res.Manifest)
 	return userFacingRunError(res, err)
 }
 
@@ -502,6 +505,34 @@ func printRunSummary(store *workspace.Store, m *run.Manifest) {
 		return
 	}
 	fmt.Print(s.String())
+}
+
+// writeReviewBundle attaches the deterministic human review bundle to a run
+// that reached a terminal state: it renders review.md into the run
+// directory and tells the user where to look. The run's own record remains
+// the source of truth, so a review that cannot be built or written is a
+// stderr warning — it never fails the command.
+func writeReviewBundle(store *workspace.Store, m *run.Manifest) {
+	if m == nil {
+		return
+	}
+	switch m.Status {
+	case run.RunStatusSucceeded, run.RunStatusFailed, run.RunStatusCancelled:
+	default:
+		// A non-terminal run has no review: there is nothing final to state.
+		return
+	}
+	b, err := review.Build(store, m)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not build the review bundle: %v\n", err)
+		return
+	}
+	path, err := review.Save(store, b)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", run.ReviewFileName, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "review bundle: %s\n", path)
 }
 
 // userFacingRunError converts a run result into the command's exit error.

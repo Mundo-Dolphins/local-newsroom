@@ -26,16 +26,21 @@ import (
 const DefaultMaxSources = 5
 
 // Stage artifact file names (relative to the run directory).
+//
+// These are the canonical paths from the run package: every consumer that
+// reads stage output by path (the orchestrator on resume, the summary
+// builder, the human review bundle) shares them, so producer and consumer
+// can never drift apart.
 const (
-	sourcesIndexPath   = "sources/index.json"
-	fetchIndexPath     = "fetch/index.json"
-	documentsIndexPath = "documents/index.json"
-	researchIndexPath  = "research/index.json"
-	dossierPath        = "research/dossier.json"
-	verificationPath   = "verify/verification.json"
-	followUpResultPath = "follow_up/result.json"
-	artifactPath       = "write/artifact.json"
-	finalCheckPath     = "final_check/result.json"
+	sourcesIndexPath   = run.ArtifactPathSourcesIndex
+	fetchIndexPath     = run.ArtifactPathFetchIndex
+	documentsIndexPath = run.ArtifactPathDocumentsIndex
+	researchIndexPath  = run.ArtifactPathResearchIndex
+	dossierPath        = run.ArtifactPathDossier
+	verificationPath   = run.ArtifactPathVerification
+	followUpResultPath = run.ArtifactPathFollowUp
+	artifactPath       = run.ArtifactPathArtifact
+	finalCheckPath     = run.ArtifactPathFinalCheck
 )
 
 // sourcesIndex is the first persisted artifact of a run: the source URL list
@@ -600,7 +605,7 @@ func (o *Orchestrator) runRender(_ context.Context, in *runner.StageInput) (*run
 		if err != nil {
 			return nil, fmt.Errorf("render: markdown: %w", err)
 		}
-		f, err := o.renderFile("output/article.md", []byte(text))
+		f, err := o.renderFile(run.ArtifactPathArticle, []byte(text))
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +616,7 @@ func (o *Orchestrator) runRender(_ context.Context, in *runner.StageInput) (*run
 		if err != nil {
 			return nil, fmt.Errorf("render: thread: %w", err)
 		}
-		f, err := o.renderFile("output/thread.txt", []byte(renderThreadPosts(posts)))
+		f, err := o.renderFile(run.ArtifactPathThread, []byte(renderThreadPosts(posts)))
 		if err != nil {
 			return nil, err
 		}

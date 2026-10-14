@@ -552,6 +552,31 @@ newsroom tui --workspace myproject
 
 Full reference: [`docs/tui-v0.5.md`](docs/tui-v0.5.md).
 
+## Run Review
+
+Every run that reaches a terminal state (succeeded, failed, or cancelled)
+gets a `review.md` inside its run directory: a single, human-readable
+document summarizing the topic, sources, claims and their verification
+status, the follow-up research, the final factual check's findings, the
+output files, and the run's profile/model — with a plain **READY** /
+**NOT READY** verdict on the output.
+
+A run that failed its final check is never described as ready.
+
+```bash
+newsroom review run-20260711T100000Z-abcdef01      # print + refresh review.md
+newsroom review run-... --workspace-root .newsroom
+newsroom review run-... --no-save                  # print only
+```
+
+The bundle is a deterministic projection of the run's persisted record: no
+LLM calls, re-runnable, secret-free (every value passes the run package's
+redaction and the workspace store's sanitization boundary), and never
+referenced on the manifest (failed runs cannot carry artifacts, but they are
+exactly when the document is needed).
+
+Full reference: [`docs/review-bundle-v0.5.md`](docs/review-bundle-v0.5.md).
+
 ## Development commands
 
 The project's common development and quality-gate commands live in the root
