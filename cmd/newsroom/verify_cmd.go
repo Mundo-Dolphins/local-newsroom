@@ -235,7 +235,7 @@ func doVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal verification result: %w", err)
 	}
 
-	if err := os.WriteFile(vFlags.outputPath, resultBytes, 0644); err != nil {
+	if err := os.WriteFile(vFlags.outputPath, resultBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write verification result: %w", err)
 	}
 

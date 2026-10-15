@@ -680,10 +680,15 @@ func (s *SQLiteStore) ListDocuments(ctx context.Context, limit int) ([]*ArchiveD
 	`
 
 	if limit > 0 {
-		query = query + fmt.Sprintf(" LIMIT %d", limit)
+		query = query + " LIMIT ?"
 	}
 
-	rows, err := s.db.Query(query)
+	var args []any
+	if limit > 0 {
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list documents: %w", err)
 	}

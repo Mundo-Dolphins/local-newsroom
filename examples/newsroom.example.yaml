@@ -2,12 +2,15 @@
 #
 # Example configuration file for the newsroom CLI (v0.5+).
 #
-# Copy this file to one of the standard locations and edit it:
-#   ~/.newsroom.yaml
-#   $XDG_CONFIG_HOME/newsroom.yaml
-#   ./newsroom.yaml
-# or pass an explicit path:
-#   newsroom --config /path/to/config.yaml write --dossier verification.json
+# Copy this file to one of the standard locations and edit it. Lookup order,
+# first existing file wins:
+#   1. --config /path/to/config.yaml flag
+#   2. $NEWSROOM_CONFIG
+#   3. ./.newsroom.yaml or ./.newsroom.yml (current directory)
+#   4. $XDG_CONFIG_HOME/newsroom/config.yaml (or ~/.config/newsroom/config.yaml)
+#   5. ~/.newsroom.yaml
+# e.g.
+#   cp examples/newsroom.example.yaml ~/.newsroom.yaml
 #
 # Precedence (highest wins):
 #   1. CLI flags            (e.g. --format json)
@@ -113,7 +116,7 @@ profiles:
 # ---------------------------------------------------------------------------
 defaults:
   language: en
-  output_format: article # article | social | summary
+  output_format: article # article | thread | hybrid
   tone: neutral          # neutral | urgent | analytical
   # temperature: 0.3
   # max_tokens: 20000

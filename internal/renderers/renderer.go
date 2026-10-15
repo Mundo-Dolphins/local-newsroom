@@ -227,7 +227,12 @@ func (r *ThreadRenderer) SetClaimRefFormat(format string) *ThreadRenderer {
 }
 
 // Render converts an EditorialArtifact to a Bluesky thread (slice of posts).
-// Each post is guaranteed to be <= MaxCharsPerPost characters.
+//
+// Every returned post is <= MaxCharsPerPost characters, including the
+// claim-reference suffix when claim references are enabled: every packing
+// decision reserves the suffix's budget, and a segment that cannot fit WITH
+// its suffix is indivisible (IndivisibleSegmentError) rather than salvaged
+// into an over-limit or silently unsuffixed post.
 func (r *ThreadRenderer) Render(artifact *contracts.EditorialArtifact) ([]string, error) {
 	if artifact == nil {
 		return nil, &RendererError{Op: "Render", Err: errors.New("artifact is nil"), Deterministic: true}
@@ -425,22 +430,14 @@ func (r *ThreadRenderer) splitPost(body string, claimIDs []string) ([]string, er
 						subPartContent := subPart + claimRefSuffix
 
 						if len(subPartContent) > r.MaxCharsPerPost {
-							// Even this part is too long - try without claim ref
-							subPartOnly := subPart
-							if len(subPartOnly) <= r.MaxCharsPerPost {
-								if currentPost.Len() > 0 && currentPost.Len()+len(subPartOnly)+1 <= r.MaxCharsPerPost {
-									currentPost.WriteString(" ")
-									currentPost.WriteString(subPart)
-								} else if currentPost.Len() == 0 {
-									currentPost.WriteString(subPart)
-								} else {
-									result = append(result, currentPost.String()+claimRefSuffix)
-									result = append(result, subPartOnly)
-									currentPost.Reset()
-								}
-								splitFound = true
-								break
-							}
+							// This segment cannot fit WITH its claim-reference suffix.
+							// It is not packed without the suffix: the suffix is
+							// appended at flush time for every post of a
+							// reference-enabled render, so an unsuffixed segment
+							// would push the flushed post past the budget (or lose
+							// its reference). A too-long segment is indivisible;
+							// try the next segment, and fail the render when none
+							// fits.
 							continue
 						}
 

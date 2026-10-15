@@ -255,7 +255,7 @@ func doFinalCheck(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to marshal check result: %w", err)
 		}
 
-		if err := os.WriteFile(fcFlags.outputPath, resultBytes, 0644); err != nil {
+		if err := os.WriteFile(fcFlags.outputPath, resultBytes, 0600); err != nil {
 			return fmt.Errorf("failed to write check result: %w", err)
 		}
 
@@ -275,7 +275,7 @@ func doFinalCheck(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to write draft artifact: %v\n", err)
 			} else {
-				if err := os.WriteFile(draftPath, artifactBytes, 0644); err != nil {
+				if err := os.WriteFile(draftPath, artifactBytes, 0600); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to write draft artifact: %v\n", err)
 				} else {
 					log(fcFlags.verbosity, 1, "Draft artifact written to: %s", draftPath)
@@ -295,7 +295,7 @@ func doFinalCheck(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to marshal findings: %v\n", err)
 			} else {
-				if err := os.WriteFile(fcFlags.writeFindingsFile, findingsBytes, 0644); err != nil {
+				if err := os.WriteFile(fcFlags.writeFindingsFile, findingsBytes, 0600); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to write findings: %v\n", err)
 				} else {
 					log(fcFlags.verbosity, 1, "Findings written to: %s", fcFlags.writeFindingsFile)
