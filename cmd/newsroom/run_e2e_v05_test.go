@@ -30,6 +30,7 @@ package main
 //  6. Configuration precedence: CLI flag > env > file > default    [Test 6]
 //  7. No secret values are ever persisted in the run workspace     [Test 7]
 //  8. Persisted artifacts survive a workspace reload               [Test 8]
+//  9. Resume after the output format changed (snapshot pins it)    [Test 9]
 //
 // The v0.1-v0.4 commands (research, verify, write, final-check, archive,
 // config, review, TUI) remain covered by the pre-existing test files.
@@ -51,6 +52,7 @@ import (
 	"time"
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/search"
@@ -193,12 +195,15 @@ func (f *v05fakeLLM) CallCount(marker string) int {
 	return f.calls[marker]
 }
 
+// v05ChatMessage is one message of a chat completions request.
+type v05ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // classify maps a chat request to the pipeline stage that issued it.
 func classifyV05Request(req struct {
-	Messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"messages"`
+	Messages []v05ChatMessage `json:"messages"`
 }) string {
 	for _, m := range req.Messages {
 		if m.Role != "system" {
@@ -222,6 +227,24 @@ func classifyV05Request(req struct {
 	return "unrecognized"
 }
 
+// writerRequestedType extracts the artifact type the writer asked the model
+// for from its user prompt (the "artifact_type: <type>" line), or "" when
+// the prompt carries no such line.
+func writerRequestedType(messages []v05ChatMessage) string {
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		for _, line := range strings.Split(m.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "artifact_type:") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "artifact_type:"))
+			}
+		}
+	}
+	return ""
+}
+
 // ServeHTTP implements http.Handler.
 func (f *v05fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
@@ -230,10 +253,7 @@ func (f *v05fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Messages []v05ChatMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":{"message":"invalid request body","type":"fake"}}`, http.StatusBadRequest)
@@ -250,6 +270,24 @@ func (f *v05fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hanging := marker == f.hangMarker
 	resp, ok := f.responses[marker]
 	f.mu.Unlock()
+
+	// The writer tells the model which artifact shape to produce in its user
+	// prompt, and a real LLM honors that request — so the fake does too when
+	// the canned response is one of the standard shapes. This keeps the
+	// persisted artifact faithful to the shape the writer was configured
+	// for, which is what the format-pinning tests (Test 9) assert.
+	if marker == v05MarkerWrite && ok {
+		switch writerRequestedType(req.Messages) {
+		case orchestrator.FormatThread:
+			if resp == v05articleJSON() || resp == v05threadJSON() {
+				resp = v05threadJSON()
+			}
+		case orchestrator.FormatArticle:
+			if resp == v05articleJSON() || resp == v05threadJSON() {
+				resp = v05articleJSON()
+			}
+		}
+	}
 
 	if fail > 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -724,8 +762,10 @@ func (e *v05env) newRunArgs(dropURLs bool, extra ...string) []string {
 	return append(args, extra...)
 }
 
-// resumeArgs builds the `newsroom run --resume <id> ...` arguments.
-func (e *v05env) resumeArgs(runID string) []string {
+// resumeArgs builds the `newsroom run --resume <id> ...` arguments. extra
+// appends additional flags (e.g. a changed --format to simulate the operator
+// editing the configuration between the failure and the resume).
+func (e *v05env) resumeArgs(runID string, extra ...string) []string {
 	args := []string{"run", "--resume", runID, "--workspace-root", e.wsRoot}
 	args = append(args, "--llm-base-url", e.llmURL)
 	if e.llmModel != "" {
@@ -1565,4 +1605,85 @@ func TestE2E_v05_ArtifactsSurviveReload(t *testing.T) {
 		t.Fatal("no manifest-referenced artifacts were checked")
 	}
 	t.Logf("reloaded %d artifacts byte-identically from the re-opened workspace", checked)
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Resume after the output format changed (issue #125)
+// ---------------------------------------------------------------------------
+
+// TestE2E_v05_ResumeAfterFormatChange pins the output format on resume:
+// a thread run that fails before the write stage is resumed after the
+// operator changes the output format to article. The run's recorded snapshot
+// must win over the new configuration: the (re)executed writer produces the
+// original thread artifact, and the render stage renders the original thread
+// output.
+func TestE2E_v05_ResumeAfterFormatChange(t *testing.T) {
+	env := newV05Env(t, v05envOpts{
+		articlePaths: []string{"article1", "article2"},
+		format:       "thread",
+	})
+
+	// First run: the verifier fails with a 500, so the run stops before the
+	// write stage — the resume must (re)execute the writer.
+	env.llm.SetFailures(v05MarkerVerify, 1)
+	err := runCommand(t, env.newRunArgs(false)...)
+	if err == nil {
+		t.Fatal("run succeeded despite a failed verify stage")
+	}
+	runID := v05FirstRunID(t, env.wsRoot)
+	m := v05LoadManifest(t, env.wsRoot, runID)
+	if m.Status != run.RunStatusFailed {
+		t.Fatalf("run status = %s, want failed", m.Status)
+	}
+	if st, _ := v05StageStatus(t, m, run.StageVerify); st != run.StageStatusFailed {
+		t.Fatalf("verify stage status = %s, want failed", st)
+	}
+	if v, ok := m.Config.Get("run.format"); !ok || v != "thread" {
+		t.Fatalf("manifest snapshot run.format = %q (present=%v), want thread", v, ok)
+	}
+	// The write stage never ran: no artifact exists yet.
+	v05MustNotExist(t, filepath.Join(v05RunDir(env.wsRoot, runID), "write", "artifact.json"))
+
+	// The operator changes the output format between the failure and the
+	// resume (here via the --format flag; a config-file or NEWSROOM_OUTPUT_FORMAT
+	// change feeds the same setting). The recorded snapshot must still win.
+	env.format = "" // remove the original flag; the extra below is the new choice
+	if err := runCommand(t, env.resumeArgs(runID, "--format", "article")...); err != nil {
+		t.Fatalf("resuming run failed: %v", err)
+	}
+
+	m = v05LoadManifest(t, env.wsRoot, runID)
+	if m.Status != run.RunStatusSucceeded {
+		t.Fatalf("resumed run status = %s, want succeeded", m.Status)
+	}
+
+	// The snapshot is untouched by the resume...
+	if v, _ := m.Config.Get("run.format"); v != "thread" {
+		t.Errorf("snapshot run.format after resume = %q, want thread (a resume must not rewrite the snapshot)", v)
+	}
+
+	// ...and the (re)executed writer produced the original format's shape,
+	// not the operator's new article choice.
+	data := mustExistFile(t, filepath.Join(v05RunDir(env.wsRoot, runID), "write", "artifact.json"))
+	var artifact contracts.EditorialArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatalf("parsing persisted artifact: %v", err)
+	}
+	if artifact.ArtifactType != contracts.ArtifactTypeThread {
+		t.Errorf("persisted artifact type = %q, want %q (the run's recorded format)", artifact.ArtifactType, contracts.ArtifactTypeThread)
+	}
+	if len(artifact.Posts) == 0 {
+		t.Error("thread artifact has no posts; the writer did not produce a thread-shaped artifact")
+	}
+
+	// The render stage renders the recorded format: thread output exists,
+	// and the operator's new article format produced no output file.
+	runDir := v05RunDir(env.wsRoot, runID)
+	thread := string(mustExistFile(t, filepath.Join(runDir, "output", "thread.txt")))
+	for _, want := range []string{strings.TrimSuffix(v05ClaimOne, "."), strings.TrimSuffix(v05ClaimTwo, ".")} {
+		if !strings.Contains(thread, want) {
+			t.Errorf("thread output missing %q:\n%s", want, thread)
+		}
+	}
+	v05MustNotExist(t, filepath.Join(runDir, "output", "article.md"))
 }

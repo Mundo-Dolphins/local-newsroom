@@ -104,9 +104,9 @@ func planRun(ctx context.Context, intent runIntent, ovs map[string]config.Overri
 }
 
 // planRunResume loads an existing run and wires the services a resumed run
-// needs, faithfully reusing the run's own configuration snapshot (follow-up
-// and archive gates come from the manifest, so a resume behaves like the
-// original run).
+// needs, faithfully reusing the run's own configuration snapshot (follow-up,
+// archive, and output-format gates come from the manifest, so a resume
+// behaves like the original run).
 func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store *workspace.Store) (*runPlan, error) {
 	// The manifest snapshot is the source of truth for what the run did:
 	// follow-up and archive services are (re)constructed only when the run
@@ -123,6 +123,11 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 	if v, ok := m.Config.Get(orchestrator.SettingRunArchiveEnabled); ok {
 		archiveEnabled, _ = strconv.ParseBool(v)
 	}
+	// The output format is snapshot-pinned too: the writer is built from it
+	// below and the render stage resolves the same recorded value, so the
+	// resumed run produces the original run's artifact shape even when the
+	// operator changed the format since the failure.
+	format := formatForResume(m, r.format)
 	profileInst, err := loadRunProfileInstance(ctx, r.profilesRoot, r.profilesName, r.profilesNameSet, intent.ProfileSpec)
 	if err != nil {
 		return nil, fmt.Errorf("loading editorial profile for resume: %w", err)
@@ -130,7 +135,7 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 
 	orchCfg := orchestrator.Config{
 		Store:            store,
-		Format:           r.format,
+		Format:           format,
 		MaxSources:       maxSourcesOrDefault(r.maxSources),
 		ArchiveTopK:      r.archiveTopK,
 		QualityThreshold: r.quality,
@@ -150,6 +155,24 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 		return nil, err
 	}
 	return &runPlan{Manifest: m, Orch: orch, Store: store}, nil
+}
+
+// formatForResume returns the output format a resumed run uses: the value
+// recorded in the run's config snapshot (run.format) when present, falling
+// back to the format resolved from the current configuration.
+//
+// v0.5 requires that a resumed run behaves like the original one: the same
+// services, the same stages, the same outputs. The snapshot value is what
+// the run recorded when it started, so the writer (built from this value in
+// buildRunServices) and the render stage (which resolves run.format from the
+// snapshot in runRender) agree on the artifact shape even when the operator
+// changes output_format — or passes a different --format — between the
+// failure and the resume.
+func formatForResume(m *run.Manifest, current string) string {
+	if v, ok := m.Config.Get(orchestrator.SettingRunFormat); ok && v != "" {
+		return v
+	}
+	return current
 }
 
 // planRunNew creates the manifest and wires the services for a new run.

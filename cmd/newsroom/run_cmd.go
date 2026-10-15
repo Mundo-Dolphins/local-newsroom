@@ -211,8 +211,11 @@ func buildRunOverrides(cmd *cobra.Command) map[string]config.Override {
 // runResolved is every run-relevant setting resolved through the full
 // precedence chain (CLI flags > environment variables > config file >
 // built-in defaults). Both a new run and a resume resolve the same values,
-// so a resumed run uses the same LLM, search, fetch, archive, and generation
-// settings the current environment provides.
+// so a resumed run uses the same LLM, search, fetch, archive, and
+// generation settings the current environment provides — with one
+// deliberate exception: the output format of a resumed run is pinned to the
+// value recorded in the run's manifest snapshot (see formatForResume), so a
+// format changed after the failure cannot reshape the run's artifact.
 type runResolved struct {
 	llmBaseURL       string
 	llmModel         string
@@ -273,7 +276,9 @@ func doRun(cmd *cobra.Command, _ []string) error {
 // doRunResume resumes an existing run. The run is fully described by its
 // persisted manifest, so no topic is required; the config chain is resolved
 // the same way as for a new run so the re-executed stages use the same
-// services.
+// services. The output format is the one exception: the run's recorded
+// snapshot value wins (see planRunResume), so a --format flag passed here
+// does not reshape the run's artifact.
 func doRunResume(ctx context.Context, cmd *cobra.Command, id run.RunID) error {
 	overrides := buildRunOverrides(cmd)
 	root, err := filepath.Abs(rf.workspaceRoot)
@@ -415,10 +420,13 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 		writerConfig.ProfileInjector = in.profile
 	}
 	// The writer produces the artifact shape the render stage expects: the
-	// run's output format maps directly onto the artifact type, so an
+	// run's output format maps directly onto the artifact type, so a
 	// --format thread run gets a thread artifact (with posts) and --format
-	// hybrid gets both body and posts.
-	switch r.format {
+	// hybrid gets both body and posts. cfg.Format carries the run's format:
+	// the current configuration for a new run, and the run's recorded
+	// snapshot for a resume (see formatForResume), which keeps the writer
+	// and the render stage in agreement across a format change.
+	switch cfg.Format {
 	case orchestrator.FormatThread:
 		writerConfig.ArtifactType = string(contracts.ArtifactTypeThread)
 	case orchestrator.FormatHybrid:
