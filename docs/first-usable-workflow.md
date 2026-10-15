@@ -240,6 +240,12 @@ Resume semantics:
 - **Everything after the failure is re-executed** — the failed (or
   interrupted) stage gets a new attempt, recorded in the manifest's attempt
   history.
+- **The run's recorded output format is pinned** — the resume reuses the
+  format the run recorded in its manifest (the one in force when the run
+  started). If you changed `output_format` in the configuration — or pass a
+  different `--format` — between the failure and the resume, the resumed run
+  still writes and renders the *original* format, so its output shape stays
+  what the original run promised. To get a different format, start a new run.
 - **Ctrl+C mid-run** cancels the in-flight stage; the manifest ends
   `cancelled` and the same `--resume` command picks the run up from there.
 
