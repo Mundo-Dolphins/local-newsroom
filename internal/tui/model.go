@@ -236,6 +236,9 @@ func (execOpener) Open(path string) tea.Cmd {
 	if editor == "" {
 		editor = "less"
 	}
+	// #nosec G204,G702 -- execs the operator's own $EDITOR (never a shell, argument
+	// vector) with a local workspace path; this is the documented "open artifact"
+	// feature of a single-user local TUI.
 	return tea.ExecProcess(exec.Command(editor, path), func(err error) tea.Msg {
 		return artifactOpenMsg{err: err}
 	})

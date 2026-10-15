@@ -43,8 +43,9 @@ http://raspi-search:8080          # <your-pi>:<searxng-port>
 ## 3. Configure the workspace and archive
 
 The config file is one YAML document, kept in one of the standard locations
-(first match wins): `--config` flag, `~/.newsroom.yaml`,
-`$XDG_CONFIG_HOME/newsroom.yaml`, `./newsroom.yaml`.
+(first existing file wins): `--config` flag, `$NEWSROOM_CONFIG`,
+`./.newsroom.yaml` (or `.yml`), `$XDG_CONFIG_HOME/newsroom/config.yaml`
+(or `~/.config/newsroom/config.yaml`), `~/.newsroom.yaml`.
 
 ```bash
 cp examples/newsroom.example.yaml ~/.newsroom.yaml

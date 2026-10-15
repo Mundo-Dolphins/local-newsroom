@@ -269,6 +269,9 @@ func (a *APIKey) UnmarshalYAML(node *yaml.Node) error {
 // A missing file returns ErrConfigNotFound (wrapped); a file that exists but
 // fails to parse or validate returns a descriptive error.
 func Load(path string) (*File, error) {
+	// #nosec G304 -- path is operator-supplied (--config flag, $NEWSROOM_CONFIG,
+	// or the fixed default lookup locations); reading the local config file
+	// is the command's purpose, and this is a single-user local CLI.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

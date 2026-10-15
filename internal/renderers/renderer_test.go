@@ -955,6 +955,78 @@ func TestThreadRenderer_EmptyBody(t *testing.T) {
 	}
 }
 
+func TestThreadRenderer_ClaimReferences_RespectCharBudget(t *testing.T) {
+
+	t.Run("segment_that_cannot_fit_with_suffix_fails_instead_of_exceeding_budget",
+		func(t *testing.T) {
+			// Two punctuation-free 280-char segments joined by a comma: one
+			// paragraph (>300), one sentence (no terminal punctuation), two
+			// boundary segments. Each segment + suffix is 309 chars, so no
+			// segment can be packed into a reference-enabled post. The render
+			// must fail loudly rather than emit over-limit posts.
+			seg := strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", 8)[:280]
+			article := &contracts.EditorialArtifact{
+				StableID:     "repro-suffix-budget",
+				ArtifactType: contracts.ArtifactTypeArticle,
+				Title:        "Suffix Budget",
+				Body:         seg + ", " + seg,
+				ClaimReferences: map[string]contracts.ClaimUsage{
+					"claim-1": {ClaimID: "claim-1", UsageType: contracts.ClaimUsageCore},
+					"claim-2": {ClaimID: "claim-2", UsageType: contracts.ClaimUsageCore},
+					"claim-3": {ClaimID: "claim-3", UsageType: contracts.ClaimUsageCore},
+				},
+				GenerationMetadata: contracts.GenerationMetadata{GeneratedAt: time.Now().UTC()},
+			}
+			r := NewThreadRenderer().SetIncludeClaimReferences(true)
+			_, err := r.Render(article)
+			if err == nil {
+				t.Fatal("expected render error, got nil")
+			}
+			if !IsIndivisibleSegmentError(err) {
+				t.Fatalf("expected indivisible-segment error, got: %v", err)
+			}
+		})
+
+	t.Run("reference_enabled_posts_all_within_budget",
+		func(t *testing.T) {
+			// Dense but punctuated prose: paragraphs over 300 chars, sentences
+			// that fit WITH the suffix. Every emitted post (content + suffix)
+			// must be <= MaxCharsPerPost.
+			var sb strings.Builder
+			for i := 0; i < 40; i++ {
+				sb.WriteString("The Dolphins improved their defensive performance noticeably this season. ")
+			}
+			article := &contracts.EditorialArtifact{
+				StableID:     "repro-suffix-pack",
+				ArtifactType: contracts.ArtifactTypeArticle,
+				Title:        "Suffix Packing",
+				Body:         sb.String(),
+				ClaimReferences: map[string]contracts.ClaimUsage{
+					"claim-1": {ClaimID: "claim-1", UsageType: contracts.ClaimUsageCore},
+					"claim-2": {ClaimID: "claim-2", UsageType: contracts.ClaimUsageCore},
+					"claim-3": {ClaimID: "claim-3", UsageType: contracts.ClaimUsageCore},
+				},
+				GenerationMetadata: contracts.GenerationMetadata{GeneratedAt: time.Now().UTC()},
+			}
+			r := NewThreadRenderer().SetIncludeClaimReferences(true)
+			posts, err := r.Render(article)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if len(posts) == 0 {
+				t.Fatal("expected posts")
+			}
+			for i, p := range posts {
+				if len(p) > BlueskyMaxChars {
+					t.Errorf("post %d is %d chars (> %d); suffix accounted: %q...", i, len(p), BlueskyMaxChars, p[:80])
+				}
+				if !strings.Contains(p, "[CIDs:") {
+					t.Errorf("post %d missing claim references", i)
+				}
+			}
+		})
+}
+
 func TestThreadRenderer_MultipleParagraphs(t *testing.T) {
 	article := &contracts.EditorialArtifact{
 		StableID:     "test-multipara",

@@ -798,7 +798,10 @@ func writeDossier(outputPath string, dossier *researcher.ResearchDossier) error 
 
 	// Write atomically: write to temp file, then rename
 	tempPath := outputPath + ".tmp." + fmt.Sprintf("%d", os.Getpid())
-	if err := os.WriteFile(tempPath, jsonBytes, 0644); err != nil {
+	// 0600: dossiers contain fetched content and unpublished claims.
+	// #nosec G703 -- tempPath derives from the operator-supplied --output path;
+	// writing where the local single-user CLI's operator asked is its purpose.
+	if err := os.WriteFile(tempPath, jsonBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 

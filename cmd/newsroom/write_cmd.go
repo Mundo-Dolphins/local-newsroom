@@ -310,7 +310,7 @@ func doWrite(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal artifact: %w", err)
 	}
 
-	if err := os.WriteFile(wFlags.outputPath, artifactBytes, 0644); err != nil {
+	if err := os.WriteFile(wFlags.outputPath, artifactBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write artifact: %w", err)
 	}
 

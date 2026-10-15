@@ -22,12 +22,15 @@ GO := go
 # renovate: datasource=github-releases depName=golangci/golangci-lint versioning=loose
 GOLANGCI_LINT_VERSION = v2.14.0
 
-# renovate: datasource=github-releases depName=securego/gosec versioning=semver
-GOSSEC_VERSION = v2.27.0
+# gosec is rebuilt from tools/gosec (see tools/gosec/doc.go): the pinned
+# release there bundles an x/tools too old for the Go 1.27 build cache, so
+# the wrapper forces a newer x/tools. Bump the version in tools/gosec/go.mod
+# and run `make gosec-sync`.
+GOSSEC_VERSION = v2.29.0
 
 GOLANGCI_LINT = $(TOOLCHAIN)/golangci-lint
 GOSSEC = $(TOOLCHAIN)/gosec
-GOSSEC_PKG = github.com/securego/gosec/v2/cmd/gosec
+GOSSEC_WRAPPER = tools/gosec
 
 DIST_DIR = $(CURDIR)/dist
 COVERAGE_OUT = $(CURDIR)/coverage.out
@@ -36,7 +39,7 @@ COVERAGE_OUT = $(CURDIR)/coverage.out
 # Supports decimals, e.g. COVER_MIN=82.5. Enforced by `make coverage`.
 COVER_MIN ?= 80
 
-.PHONY: help fmt vet test coverage lint security build check tools clean
+.PHONY: help fmt vet test coverage lint security build check tools gosec-sync clean
 .PHONY: $(GOLANGCI_LINT) $(GOSSEC)
 
 # ---- Dependency bootstrap (kept separate from validation targets) ------------
@@ -44,12 +47,24 @@ COVER_MIN ?= 80
 tools: $(GOLANGCI_LINT) $(GOSSEC)
 
 $(GOLANGCI_LINT):
-	@echo "+ $(GOLANGCI_LINT)"; \
-	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@mkdir -p $(TOOLCHAIN); \
+	CURRENT_VERSION=$$($(GOLANGCI_LINT) --version 2>/dev/null | sed -n 's/^golangci-lint has version \([^ ]*\).*/\1/p'); \
+	if [ "$$CURRENT_VERSION" != "$(GOLANGCI_LINT_VERSION)" ]; then \
+		echo "+ $(GOLANGCI_LINT) ($(GOLANGCI_LINT_VERSION))"; \
+		GOBIN=$(TOOLCHAIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	else \
+		echo "+ $(GOLANGCI_LINT) already at $(GOLANGCI_LINT_VERSION)"; \
+	fi
 
 $(GOSSEC):
-	@echo "+ $(GOSSEC)"; \
-	$(GO) install $(GOSSEC_PKG)@$(GOSSEC_VERSION)
+	@mkdir -p $(TOOLCHAIN); \
+	CURRENT_VERSION=$$($(GOSSEC) -version 2>/dev/null | sed -n 's/^Version: //p'); \
+	if [ "$$CURRENT_VERSION" != "$(GOSSEC_VERSION)" ]; then \
+		echo "+ $(GOSSEC) (built $(GOSSEC_VERSION) from $(GOSSEC_WRAPPER))"; \
+		cd $(GOSSEC_WRAPPER) && $(GO) build -ldflags "-X main.Version=$(GOSSEC_VERSION)" -o $(GOSSEC) .; \
+	else \
+		echo "+ $(GOSSEC) already at $(GOSSEC_VERSION)"; \
+	fi
 
 # ---- Formatting and vet -------------------------------------------------------
 
@@ -88,17 +103,19 @@ lint: $(GOLANGCI_LINT)
 
 security: $(GOSSEC)
 	@echo "Running gosec..."; \
-	$(GOSSEC) --exclude GO102,G101,G204 ./... >/dev/null 2>&1; \
+	$(GOSSEC) ./...; \
 	EXIT_CODE=$$?; \
-	if [ $$EXIT_CODE -eq 1 ] || [ $$EXIT_CODE -eq 2 ]; then \
-		echo "Note: gosec encountered some issues, but continuing..."; \
-		exit 0; \
-	elif [ $$EXIT_CODE -ne 0 ]; then \
-		echo "gosec found security issues!"; \
+	if [ $$EXIT_CODE -ne 0 ]; then \
+		echo "gosec found security issues (exit $$EXIT_CODE)"; \
 		exit 1; \
 	else \
 		echo "No security issues found."; \
 	fi
+
+# Regenerate the vendored gosec cmd files in tools/gosec after bumping the
+# pinned version in tools/gosec/go.mod.
+gosec-sync:
+	@sh $(GOSSEC_WRAPPER)/sync.sh
 
 # ---- Build ---------------------------------------------------------------------
 

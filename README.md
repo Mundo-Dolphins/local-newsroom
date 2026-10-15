@@ -28,12 +28,13 @@ newsroom config validate   # check the file
 newsroom config show       # print the effective configuration
 ```
 
-The CLI looks for the config file at (first match wins):
+The CLI looks for the config file in this order (first existing file wins):
 
 1. `--config /path/to/file.yaml` flag on any command (explicit path)
-2. `~/.newsroom.yaml`
-3. `$XDG_CONFIG_HOME/newsroom.yaml`
-4. `./newsroom.yaml` (current directory)
+2. `$NEWSROOM_CONFIG` environment variable
+3. `./.newsroom.yaml` or `./.newsroom.yml` in the current directory
+4. `$XDG_CONFIG_HOME/newsroom/config.yaml` (or `~/.config/newsroom/config.yaml`)
+5. `~/.newsroom.yaml`
 
 If none exists the CLI runs on environment variables and built-in defaults
 (see the per-command sections below) and prints a one-line notice.
@@ -614,17 +615,19 @@ Individual gates can be run on their own, e.g. `make test`, `make fmt`,
 ## Tools
 
 `golangci-lint` and `gosec` are installed into `$(TOOLCHAIN)` (default
-`~/go/bin`) with pinned versions controlled in the Makefile:
+`~/go/bin`) with pinned versions:
 
 ```bash
 make tools
 ```
 
-- **golangci-lint**: v2.14.0
-- **gosec**: v2.27.0
-
-To update tools, change the `GOLANGCI_LINT_VERSION` and `GOSSEC_VERSION`
-variables in the Makefile and run `make tools`.
+- **golangci-lint**: v2.14.0 (installed from release, version pinned in the
+  `Makefile`)
+- **gosec**: v2.29.0, rebuilt from the `tools/gosec` wrapper module (the
+  pinned release's bundled `golang.org/x/tools` is too old to read Go 1.27
+  build caches; the wrapper forces a newer one — see
+  `tools/gosec/doc.go`). The version is pinned in `tools/gosec/go.mod`; after
+  bumping it, run `make gosec-sync`.
 
 Dependency installation is never performed silently by the validation targets,
 so `make check` will not fetch anything for you: run `make tools` first.

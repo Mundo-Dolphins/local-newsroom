@@ -862,6 +862,8 @@ func resolveArchiveSettings(cmd *cobra.Command, includeAdd bool) error {
 
 // readURLsFromFile reads URLs from a file (one per line).
 func readURLsFromFile(path string) ([]string, error) {
+	// #nosec G304 -- path is operator-supplied (--urls-file); reading a local
+	// URL list is the command's purpose in a single-user local CLI.
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
