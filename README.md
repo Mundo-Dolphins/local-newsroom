@@ -173,6 +173,13 @@ keys must hold an environment reference (a literal secret is a load-time
 error), unknown keys are rejected, file references are plain names inside
 the preset directory, and a path that would escape the bundle is refused.
 
+The engine-side counterpart for a Hugo destination is the staging adapter in
+`internal/hugo` ([docs/hugo-publication.md](docs/hugo-publication.md)): it
+turns a READY rendered article into a site-ready content file inside a Hugo
+tree — deterministic path, safe front matter, draft by default, explicit
+overwrite, atomic writes, dry-run capable — and stages only (no Git, no
+network). The bundle's `hugo.yaml` destination feeds it.
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates
