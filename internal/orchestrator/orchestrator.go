@@ -62,6 +62,7 @@ const (
 	SettingRunArchiveTopK    = "run.archive_top_k"
 	SettingRunArchiveEnabled = "run.archive_enabled"
 	SettingRunMaxSources     = "run.max_sources"
+	SettingRunPublication    = "run.publication"
 )
 
 // Output format values accepted by the render stage.

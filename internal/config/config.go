@@ -17,7 +17,7 @@
 //
 // The config file is a small YAML document with one section per service:
 //
-//	llm, search, embedding, rerank, archive, fetch, chunk, profiles, defaults
+//	llm, search, embedding, rerank, archive, fetch, chunk, profiles, editorial, defaults
 //
 // Lookup order when no --config flag is given:
 //
@@ -103,6 +103,9 @@ type File struct {
 	Chunk ChunkSection `yaml:"chunk"`
 	// Profiles configures the editorial profile directory.
 	Profiles ProfilesSection `yaml:"profiles"`
+	// Editorial configures the external editorial bundle (a local directory
+	// with publication presets and optionally editorial profile content).
+	Editorial EditorialSection `yaml:"editorial"`
 	// Defaults holds global fallbacks for generation parameters shared by
 	// the write, verify, final-check, and research stages.
 	Defaults DefaultsSection `yaml:"defaults"`
@@ -198,6 +201,33 @@ type ProfilesSection struct {
 	Root *string `yaml:"root"`
 	// Name is the profile name within the root directory.
 	Name *string `yaml:"name"`
+}
+
+// EditorialSection configures the external editorial bundle.
+//
+// A bundle is a local directory — typically a separately checked-out private
+// repository — that supplies publication presets and, optionally, editorial
+// profile content. The engine consumes the directory exactly as present: it
+// never clones or pulls a Git repository, and it performs no network access.
+//
+//	<~/some/editorial-bundle>
+//	  common/                    optional: publication-wide profile content
+//	  authors/<author>/          optional: author profiles
+//	  publications/<name>/       optional: one directory per publication
+//	    publication.yaml         the publication preset
+//	    hugo.yaml                optional: Hugo destination config
+//	    bluesky.yaml             optional: Bluesky destination config
+//
+// Bundle YAML files follow the same secret rule as the config file:
+// credential-like keys (api_key, token, ...) must hold an environment
+// reference ({env: NAME}), never a literal value.
+type EditorialSection struct {
+	// BundleRoot is the path of the editorial bundle directory
+	// (e.g. "~/edits" or a checked-out private repository).
+	BundleRoot *string `yaml:"bundle_root"`
+	// Publication selects the publication preset within the bundle
+	// (e.g. "mundodolphins").
+	Publication *string `yaml:"publication"`
 }
 
 // DefaultsSection holds global fallbacks for generation parameters.
@@ -308,13 +338,28 @@ func LoadBytes(data []byte, source string) (*File, error) {
 		return nil, fmt.Errorf("invalid config %s: unsupported schema_version %d (this release understands %d)", name, f.SchemaVersion, SchemaVersion)
 	}
 
-	if err := walkSecretKeys(&doc, ""); err != nil {
+	if err := ValidateSecretKeys(&doc); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", name, err)
 	}
 	if err := f.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", name, err)
 	}
 	return &f, nil
+}
+
+// ValidateSecretKeys walks a parsed YAML document and returns an error when
+// any key whose name looks like a credential does not hold an
+// environment-reference mapping.
+//
+// It accepts a document node (as produced by yaml.Unmarshal into a yaml.Node)
+// or any mapping/sequence node. Exported so other local YAML sources
+// (editorial bundle files) enforce the same env-reference-only secret rule
+// as the config file.
+func ValidateSecretKeys(node *yaml.Node) error {
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return walkSecretKeys(node.Content[0], "")
+	}
+	return walkSecretKeys(node, "")
 }
 
 // walkSecretKeys walks the raw document and rejects any key whose name looks

@@ -100,6 +100,79 @@ A full annotated example covering every section (llm, search, embedding,
 rerank, archive, fetch, chunk, profiles, defaults) lives at
 [examples/newsroom.example.yaml](examples/newsroom.example.yaml).
 
+## Editorial bundle
+
+The **editorial bundle** is how a *private* repository of editorial content
+meets this public engine. It is a plain local directory — typically a
+separately checked-out private repository — that supplies publication presets
+and, optionally, editorial profile content. The engine consumes the directory
+exactly as it is present: it never clones or pulls a Git repository and makes
+no network access while loading a bundle.
+
+```
+<bundle-root>/
+  common/                     optional: publication-wide profile content
+    style.md
+    facts-policy.md
+  authors/                    optional: author profiles
+    <author>/style.md
+  publications/               optional: one directory per publication
+    <name>/
+      publication.yaml        the publication preset
+      hugo.yaml               optional: Hugo destination config
+      bluesky.yaml            optional: Bluesky destination config
+```
+
+A publication preset is a resolved, validated configuration reference:
+
+```yaml
+# publications/mundodolphins/publication.yaml
+profile: javi            # the bundle profile to use (author or dir/author)
+language: es             # output language
+renderer: thread         # output format: article | thread | hybrid
+hugo: hugo.yaml          # optional destination config file reference
+bluesky: bluesky.yaml    # optional destination config file reference
+```
+
+```
+# publications/mundodolphins/bluesky.yaml
+handle: "@mundodolphins"        # quoted: "@" is a reserved YAML indicator
+api_key:
+  env: BLUESKY_API_KEY          # same env-reference-only secret rule as the config file
+```
+
+Configure the bundle in the newsroom config file, the environment, or
+per-run flags (same precedence as every other setting):
+
+```yaml
+editorial:
+  bundle_root: ~/editorial-bundle   # $NEWSROOM_EDITORIAL_BUNDLE
+  publication: mundodolphins        # $NEWSROOM_PUBLICATION
+```
+
+```bash
+newsroom run --topic "..." --bundle-root ~/editorial-bundle --publication mundodolphins
+```
+
+When a publication is selected:
+
+- Its **language** and **renderer** apply only where no higher layer
+  (flag, environment, config file) provided a value — the preset sits
+  below the config file in the precedence chain.
+- Its **profile** reference loads the profile from the *bundle* (falling
+  back to `--profile` / `profiles.name` when given); with no reference at
+  all, the bundle's `common/` profile is used.
+- The run manifest records the preset's **identity and provenance only**:
+  its name, the bundle path, and a hash of the resolved non-secret values.
+  Private content — style text, author voice, handles, destination URLs —
+  never lands in the run record, and a resumed run re-derives the recorded
+  preset from the manifest.
+
+Security rules for bundle files mirror the config file: credential-like
+keys must hold an environment reference (a literal secret is a load-time
+error), unknown keys are rejected, file references are plain names inside
+the preset directory, and a path that would escape the bundle is refused.
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates

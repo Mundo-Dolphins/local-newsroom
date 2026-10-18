@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -85,6 +82,8 @@ type runFlags struct {
 	urls          []string
 	profile       string
 	profileRoot   string
+	publication   string
+	bundleRoot    string
 	format        string
 	workspace     string
 	workspaceRoot string
@@ -134,6 +133,8 @@ func init() {
 	f.StringVar(&rf.workspace, "workspace", "default", "workspace name")
 	f.StringVar(&rf.workspaceRoot, "workspace-root", ".newsroom", "workspace root directory")
 	f.StringVar(&rf.profileRoot, "profile-root", "", "profiles root directory (default: profiles.root from the configuration chain)")
+	f.StringVar(&rf.publication, "publication", "", "publication preset in the editorial bundle (default: editorial.publication from the configuration chain)")
+	f.StringVar(&rf.bundleRoot, "bundle-root", "", "editorial bundle directory (default: editorial.bundle_root from the configuration chain)")
 	f.BoolVar(&rf.followUp, "follow-up", false, "enable bounded follow-up research for unresolved claims (requires search)")
 	f.StringVar(&rf.resume, "resume", "", "resume an existing run by ID instead of creating a new run")
 	f.Float64Var(&rf.quality, "quality-threshold", 0, "verification quality score (0-100) below which a warning is recorded (default 60)")
@@ -196,6 +197,8 @@ func buildRunOverrides(cmd *cobra.Command) map[string]config.Override {
 		{config.SettingArchiveDBPath, "archive-db-path"},
 		{config.SettingArchiveTopK, "archive-top-k"},
 		{config.SettingProfilesRoot, "profile-root"},
+		{config.SettingEditorialBundle, "bundle-root"},
+		{config.SettingEditorialPublication, "publication"},
 		{config.SettingDefaultsLanguage, "language"},
 		{config.SettingTemperature, "temperature"},
 		{config.SettingMaxTokens, "max-tokens"},
@@ -236,11 +239,15 @@ type runResolved struct {
 	profilesRoot     string
 	profilesName     string
 	profilesNameSet  bool
+	bundleRoot       string
+	publication      string
 	language         string
+	languageSource   string
 	temperature      float64
 	maxTokens        int
 	tone             string
 	format           string
+	formatSource     string
 	quality          float64
 }
 
@@ -479,30 +486,6 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 		)
 	}
 	return cfg, nil
-}
-
-// profileHash digests the merged profile content for reproducibility records.
-func profileHash(p profiles.Profile) string {
-	h := sha256.New()
-	h.Write([]byte(p.CoreFactsPolicy))
-	h.Write([]byte{0})
-	h.Write([]byte(p.Style))
-	h.Write([]byte{0})
-	h.Write([]byte(p.Vocabulary))
-	h.Write([]byte{0})
-	h.Write([]byte(p.OutputFormat))
-	keys := make([]string, 0, len(p.Examples))
-	for k := range p.Examples {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		h.Write([]byte(k))
-		h.Write([]byte{0})
-		h.Write([]byte(p.Examples[k]))
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // printRunSummary prints the concise run summary to stdout.

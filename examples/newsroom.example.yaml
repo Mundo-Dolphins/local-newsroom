@@ -110,6 +110,24 @@ profiles:
   name: default
 
 # ---------------------------------------------------------------------------
+# Editorial: the external editorial bundle — a local directory (typically a
+# separately checked-out private repository) with publication presets and,
+# optionally, editorial profile content. The engine reads the directory
+# as-is; it never clones or pulls. See README.md ("Editorial bundle").
+#
+# <bundle_root>/
+#   common/                    optional: publication-wide profile content
+#   authors/<author>/          optional: author profiles
+#   publications/<name>/       optional: one directory per publication
+#     publication.yaml         preset: profile, language, renderer, destinations
+#     hugo.yaml                optional: Hugo destination config
+#     bluesky.yaml             optional: Bluesky destination config
+# ---------------------------------------------------------------------------
+# editorial:
+#   bundle_root: ~/editorial-bundle   # or: NEWSROOM_EDITORIAL_BUNDLE
+#   publication: mundodolphins        # or: NEWSROOM_PUBLICATION
+
+# ---------------------------------------------------------------------------
 # Defaults: output preferences for write/final-check unless a flag is given.
 # Leave temperature/max_tokens unset to keep each stage's built-in values
 # (write: 0.3/20000, final-check: 0.1/5000, verify: 0.3/50000).

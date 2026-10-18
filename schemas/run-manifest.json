@@ -67,6 +67,16 @@
       },
       "description": "The profile used for this run, when one applies."
     },
+    "publication": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Publication preset name: a conservative identifier (letters, digits, '.', '-', '_')." },
+        "bundle_path": { "type": "string", "description": "The editorial bundle directory the preset was loaded from." },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{8,128}$", "description": "Digest of the resolved non-secret preset content, so a bundle that changed on disk is detectable." }
+      },
+      "description": "The publication preset selected for this run, when one was selected. Identity and provenance only: private bundle content (style text, handles, destination URLs) is never recorded."
+    },
     "model": {
       "$ref": "#/definitions/modelMetadata"
     },
