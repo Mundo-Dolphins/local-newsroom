@@ -270,6 +270,59 @@ func (p Profile) Validate() error {
 }
 
 // ---------------------------------------------------------------------------
+// Publication
+// ---------------------------------------------------------------------------
+
+// Publication identifies the publication preset selected for a run — the
+// resolved preset of an external editorial bundle (style/preset source, not
+// content).
+//
+// SECURITY: like Profile, only identity and provenance are recorded. The
+// bundle's private content (profile text, destination handles and URLs) is
+// never part of the manifest; the hash digests the resolved non-secret preset
+// values so a bundle that changed on disk is detectable, and a resumed run
+// can re-derive the same preset from the recorded bundle path.
+type Publication struct {
+	// ID is the publication preset name (e.g. "mundodolphins").
+	ID string `json:"id"`
+
+	// BundlePath is the directory the preset was loaded from.
+	BundlePath string `json:"bundle_path,omitempty"`
+
+	// Hash is the digest of the resolved non-secret preset content
+	// (lowercase hex).
+	Hash string `json:"hash,omitempty"`
+}
+
+// publicationIDRe allows a conservative publication preset identifier.
+var publicationIDRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+// publicationHashRe allows lowercase hex digests of 8-128 characters.
+var publicationHashRe = regexp.MustCompile(`^[0-9a-f]{8,128}$`)
+
+// Validate checks the publication reference.
+//
+// Like Profile, the reference is identity and provenance: the ID is a
+// conservative identifier and the bundle path is a local directory (the
+// traversal gate mirrors Profile; the path is recorded as-is, like the
+// profile source path). The private content of the bundle never lands here.
+func (p Publication) Validate() error {
+	if p.ID == "" {
+		return errors.New("publication id is required")
+	}
+	if !publicationIDRe.MatchString(p.ID) {
+		return fmt.Errorf("publication id %q is invalid: use letters, digits, '.', '-', '_' (1-64 chars)", p.ID)
+	}
+	if p.BundlePath != "" && containsTraversal(p.BundlePath) {
+		return fmt.Errorf("publication bundle path %q must not contain '..' path segments", p.BundlePath)
+	}
+	if p.Hash != "" && !publicationHashRe.MatchString(p.Hash) {
+		return fmt.Errorf("publication hash %q is invalid: use lowercase hex (8-128 chars)", p.Hash)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // ModelMetadata
 // ---------------------------------------------------------------------------
 
@@ -770,6 +823,9 @@ type Manifest struct {
 	// Profile is the selected editorial profile, when one was selected.
 	Profile *Profile `json:"profile,omitempty"`
 
+	// Publication is the selected publication preset, when one was selected.
+	Publication *Publication `json:"publication,omitempty"`
+
 	// Model records the LLM model and endpoint used by the run.
 	// Credentials are never recorded (see ModelMetadata).
 	Model ModelMetadata `json:"model"`
@@ -824,6 +880,9 @@ type NewManifestParams struct {
 
 	// Profile is optional.
 	Profile *Profile
+
+	// Publication is optional.
+	Publication *Publication
 
 	// Model is optional; credentials must not be included (see ModelMetadata).
 	Model ModelMetadata
@@ -900,6 +959,7 @@ func NewManifest(p NewManifestParams) (*Manifest, error) {
 		Topic:         p.Topic,
 		SourceMode:    p.SourceMode,
 		Profile:       p.Profile,
+		Publication:   p.Publication,
 		Model:         p.Model,
 		Stages:        plan,
 		StartedAt:     ts,
@@ -1011,6 +1071,11 @@ func (m *Manifest) Validate() error {
 	}
 	if m.Profile != nil {
 		if err := m.Profile.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if m.Publication != nil {
+		if err := m.Publication.Validate(); err != nil {
 			errs = append(errs, err)
 		}
 	}

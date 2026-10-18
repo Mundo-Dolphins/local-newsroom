@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/editorial"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
@@ -128,7 +130,26 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 	// resumed run produces the original run's artifact shape even when the
 	// operator changed the format since the failure.
 	format := formatForResume(m, r.format)
-	profileInst, err := loadRunProfileInstance(ctx, r.profilesRoot, r.profilesName, r.profilesNameSet, intent.ProfileSpec)
+
+	// The publication preset, when the run recorded one, is re-derived from
+	// the manifest (not the current configuration): a resume must behave
+	// like the original run, so the recorded preset name and bundle path win
+	// over whatever the operator reconfigured since the failure.
+	preset, err := resumePublication(m, r)
+	if err != nil {
+		return nil, fmt.Errorf("loading editorial publication for resume: %w", err)
+	}
+
+	// The output language is snapshot-pinned the same way the format is:
+	// the writer must use the language the original run recorded (which is
+	// where a publication preset's language lands).
+	if v, ok := m.Config.Get(orchestrator.SettingRunLanguage); ok && v != "" {
+		r.language = v
+	} else if v, ok := m.Config.Get(config.SettingDefaultsLanguage); ok && v != "" {
+		r.language = v
+	}
+
+	profileInst, err := loadRunProfileInstance(ctx, r, preset, intent)
 	if err != nil {
 		return nil, fmt.Errorf("loading editorial profile for resume: %w", err)
 	}
@@ -215,10 +236,26 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 		return nil, errors.New("follow-up is enabled but no search provider is configured (--search-base-url, SEARXNG_BASE_URL, or search.base_url)")
 	}
 
-	// --- Editorial profile ----------------------------------------------
-	profileRef, profileInst, err := loadRunProfile(ctx, r.profilesRoot, r.profilesName, r.profilesNameSet, intent.ProfileSpec)
+	// --- Editorial publication preset (external bundle) -------------------
+	//
+	// The preset contributes its language/renderer only where no higher
+	// precedence layer (flag, environment, config file) provided a value.
+	preset, publication, err := resolveEditorial(r)
 	if err != nil {
 		return nil, err
+	}
+
+	// --- Editorial profile ----------------------------------------------
+	root, spec, hasProfile := selectProfile(preset, r, intent)
+	var (
+		profileRef  *run.Profile
+		profileInst profiles.Injector
+	)
+	if hasProfile {
+		profileRef, profileInst, err = loadRunProfile(ctx, root, spec, preset != nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// --- Workspace ---------------------------------------------------------
@@ -261,6 +298,14 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 			return nil, fmt.Errorf("recording run parameter %s: %w", p[0], err)
 		}
 	}
+	// The publication preset identity is recorded in the snapshot (the hash
+	// and bundle path live on the manifest's Publication reference): the
+	// preset's private content itself never lands in the run record.
+	if publication != nil {
+		if err := snap.Set(orchestrator.SettingRunPublication, publication.ID); err != nil {
+			return nil, fmt.Errorf("recording publication %s: %w", orchestrator.SettingRunPublication, err)
+		}
+	}
 	if len(urls) > 0 {
 		data, err := json.Marshal(urls)
 		if err != nil {
@@ -273,14 +318,15 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 
 	now := time.Now().UTC()
 	m, err := run.NewManifest(run.NewManifestParams{
-		Workspace:  ws,
-		Topic:      strings.TrimSpace(intent.Topic),
-		SourceMode: mode,
-		Profile:    profileRef,
-		Model:      run.NewModelMetadata("omlx", r.llmModel, r.llmBaseURL),
-		Config:     snap,
-		Stages:     run.CanonicalStages(),
-		StartedAt:  now,
+		Workspace:   ws,
+		Topic:       strings.TrimSpace(intent.Topic),
+		SourceMode:  mode,
+		Profile:     profileRef,
+		Publication: publication,
+		Model:       run.NewModelMetadata("omlx", r.llmModel, r.llmBaseURL),
+		Config:      snap,
+		Stages:      run.CanonicalStages(),
+		StartedAt:   now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating run manifest: %w", err)
@@ -403,13 +449,31 @@ func resolveRunConfigOverrides(ovs map[string]config.Override) (*runResolved, er
 	r.profilesName = profilesName
 	r.profilesNameSet = nameSource != "default" && nameSource != ""
 
+	if r.bundleRoot, _, err = resolve(config.SettingEditorialBundle); err != nil {
+		return nil, err
+	}
+	if r.publication, _, err = resolve(config.SettingEditorialPublication); err != nil {
+		return nil, err
+	}
+
 	if r.language, _, err = resolve(config.SettingDefaultsLanguage); err != nil {
+		return nil, err
+	}
+	// The source label is tracked: a publication preset contributes its own
+	// language/renderer only where no higher precedence layer (flag, env,
+	// config file) provided a value — i.e. where the resolution fell to the
+	// built-in default or came back unset. The resolution must be repeated
+	// with the CLI overrides so an explicit --language is not mislabeled.
+	if _, r.languageSource, err = appConfig.Resolve(config.SettingDefaultsLanguage, ov(config.SettingDefaultsLanguage)); err != nil {
 		return nil, err
 	}
 	if r.language == "" {
 		// The search language doubles as the generation language when no
 		// explicit language is configured.
 		r.language = r.searchLanguage
+		if r.language != "" {
+			r.languageSource = "derived (search language)"
+		}
 	}
 	if r.temperature, _, err = resolveFloat(config.SettingTemperature); err != nil {
 		return nil, err
@@ -429,40 +493,164 @@ func resolveRunConfigOverrides(ovs map[string]config.Override) (*runResolved, er
 	if r.format, _, err = resolve(config.SettingOutputFormat); err != nil {
 		return nil, err
 	}
+	if _, r.formatSource, err = appConfig.Resolve(config.SettingOutputFormat, ov(config.SettingOutputFormat)); err != nil {
+		return nil, err
+	}
 	if r.format == "" {
 		r.format = orchestrator.FormatArticle
+		r.formatSource = "default"
 	}
 	_ = searchLangSet
 	return r, nil
 }
 
-// loadRunProfile resolves and loads the editorial profile for a run.
+// resolveEditorial resolves the publication preset for a run from the
+// resolved editorial settings.
 //
-// spec takes precedence over the profiles.name setting; a two-segment value
-// (<publication>/<author>) selects a publication directory under the
-// profiles root, a one-segment value selects an author directly under the
-// root. When neither is specified, (nil, nil, nil) is returned.
-func loadRunProfile(ctx context.Context, root, name string, nameSet bool, spec string) (*run.Profile, profiles.Injector, error) {
-	if spec == "" && nameSet {
-		spec = name
-	}
-	if spec == "" {
+// It returns nils (no error) when no publication is selected. A selected
+// publication without a bundle root is a clean configuration error. On
+// success it also applies the preset's own defaults to the run's resolved
+// settings: the preset's language and renderer contribute only where no
+// higher precedence layer (flag, environment, config file) provided a
+// value — i.e. where the resolution fell to the built-in default or came
+// back unset. The preset sits below the config file in the precedence
+// chain, because it is data from the bundle, not operator configuration.
+func resolveEditorial(r *runResolved) (*editorial.Preset, *run.Publication, error) {
+	if r.publication == "" {
 		return nil, nil, nil
 	}
-	if root == "" {
-		return nil, nil, fmt.Errorf("profile %q needs a profiles root: pass --profile-root or set profiles.root (the flag, environment, or config file)", spec)
+	if r.bundleRoot == "" {
+		return nil, nil, fmt.Errorf(
+			"publication %q requires an editorial bundle root: pass --bundle-root or set editorial.bundle_root (the flag, $NEWSROOM_EDITORIAL_BUNDLE, or the config file)",
+			r.publication)
 	}
+	loader, err := editorial.NewLoader(editorial.Config{Root: r.bundleRoot})
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading editorial bundle: %w", err)
+	}
+	preset, err := loader.LoadPreset(r.publication)
+	if err != nil {
+		return nil, nil, fmt.Errorf("publication %q: %w", r.publication, err)
+	}
+	if preset.Language != "" && (r.languageSource == "default" || r.languageSource == "unset") {
+		r.language = preset.Language
+	}
+	if preset.Renderer != "" && (r.formatSource == "default" || r.formatSource == "unset") {
+		r.format = preset.Renderer
+	}
+	pub := &run.Publication{
+		ID:         preset.Name,
+		BundlePath: loader.Root(),
+		Hash:       preset.Hash,
+	}
+	return preset, pub, nil
+}
 
+// resumePublication re-derives the publication preset of a resumed run from
+// the run's own manifest record, not from the current configuration: a
+// resume must behave like the original run, so the recorded preset name and
+// bundle path win over whatever the operator reconfigured since the failure.
+//
+// A bundle that changed on disk (preset hash mismatch) does not fail the
+// resume; it is reported on stderr, because the run's own snapshot already
+// pins the settings the stages resolve from the manifest.
+func resumePublication(m *run.Manifest, r *runResolved) (*editorial.Preset, error) {
+	pub := m.Publication
+	if pub == nil {
+		// The run recorded no publication: a resumed run keeps behaving
+		// without one, even if the operator configured a publication in the
+		// meantime — the manifest is the source of truth for what the run was.
+		return nil, nil
+	}
+	bundle := pub.BundlePath
+	if bundle == "" {
+		bundle = r.bundleRoot
+	}
+	if bundle == "" {
+		return nil, fmt.Errorf("run %s recorded publication %q but no editorial bundle root is available: pass --bundle-root or set editorial.bundle_root", m.ID, pub.ID)
+	}
+	loader, err := editorial.NewLoader(editorial.Config{Root: bundle})
+	if err != nil {
+		return nil, fmt.Errorf("loading editorial bundle: %w", err)
+	}
+	preset, err := loader.LoadPreset(pub.ID)
+	if err != nil {
+		return nil, fmt.Errorf("publication %q: %w", pub.ID, err)
+	}
+	if pub.Hash != "" && preset.Hash != pub.Hash {
+		fmt.Fprintf(os.Stderr, "[newsroom] warning: publication %q content differs from what run %s recorded (the bundle changed); using the current bundle\n", pub.ID, m.ID)
+	}
+	if preset.Language != "" && (r.languageSource == "default" || r.languageSource == "unset") {
+		r.language = preset.Language
+	}
+	if preset.Renderer != "" && (r.formatSource == "default" || r.formatSource == "unset") {
+		r.format = preset.Renderer
+	}
+	return preset, nil
+}
+
+// selectProfile determines the profile source for a run.
+//
+// The spec precedence is: explicit --profile flag > profiles.name setting
+// (when explicitly set, i.e. not the built-in default) > the publication
+// preset's profile reference. The root follows the source: a selected
+// publication preset reads the profile from the editorial bundle, otherwise
+// from the profiles root (the historical behavior, unchanged).
+//
+// ok is false when no profile applies at all.
+func selectProfile(preset *editorial.Preset, r *runResolved, intent runIntent) (root, spec string, ok bool) {
+	spec = intent.ProfileSpec
+	if spec == "" && r.profilesNameSet {
+		spec = r.profilesName
+	}
+	if preset == nil {
+		return r.profilesRoot, spec, spec != ""
+	}
+	// A selected publication reads the profile from the bundle; a missing
+	// spec falls back to the preset's own profile reference, which may be
+	// empty (the bundle's common profile, no author).
+	if spec == "" {
+		spec = preset.Profile
+	}
+	return r.bundleRoot, spec, true
+}
+
+// loadRunProfile loads the editorial profile for a run.
+//
+// spec is "<publication>/<author>", "<author>", or "" (the bundle's common
+// profile without an author). fromBundle distinguishes the two root kinds
+// for error messages and the empty-profile rule: an empty bundle (no common
+// content and no author) yields "no profile" rather than a fake identity,
+// while a named profile under the profiles root always yields a profile
+// (the historical behavior).
+func loadRunProfile(ctx context.Context, root, spec string, fromBundle bool) (*run.Profile, profiles.Injector, error) {
 	base := root
 	author := ""
-	if i := strings.LastIndex(spec, "/"); i >= 0 {
-		base = filepath.Join(root, spec[:i])
-		author = spec[i+1:]
-	} else {
-		author = spec
+	profileID := ""
+	if spec != "" {
+		if i := strings.LastIndex(spec, "/"); i >= 0 {
+			author = spec[i+1:]
+			profileID = spec[:i] + "." + author
+			base = filepath.Join(root, spec[:i])
+		} else {
+			author = spec
+			profileID = author
+		}
+		if author == "" {
+			return nil, nil, fmt.Errorf("invalid profile %q: expected <publication>/<author> or <author>", spec)
+		}
 	}
-	if author == "" {
-		return nil, nil, fmt.Errorf("invalid profile %q: expected <publication>/<author> or <author>", spec)
+	if root == "" {
+		if fromBundle {
+			return nil, nil, fmt.Errorf("profile needs an editorial bundle root: pass --bundle-root or set editorial.bundle_root (the flag, environment, or config file)")
+		}
+		return nil, nil, fmt.Errorf("profile needs a profiles root: pass --profile-root or set profiles.root (the flag, environment, or config file)")
+	}
+	if spec == "" && !fromBundle {
+		// Historical contract: an empty spec means "no profile" outside a
+		// bundle. The production callers gate on selectProfile, but the rule
+		// is kept explicit here for direct callers.
+		return nil, nil, nil
 	}
 
 	loader, err := profiles.NewLoader(profiles.Config{
@@ -477,21 +665,37 @@ func loadRunProfile(ctx context.Context, root, name string, nameSet bool, spec s
 		return nil, nil, fmt.Errorf("loading profile %q: %w", spec, err)
 	}
 
-	inst := profiles.NewInjector(p)
-	profileID := author
-	if i := strings.LastIndex(spec, "/"); i >= 0 {
-		profileID = spec[:i] + "." + author
+	if spec == "" {
+		// A publication with no profile reference loads the bundle's common
+		// profile. If that content is empty, the run simply has no profile:
+		// an empty bundle must not fake a profile identity.
+		if profileEmpty(p) {
+			return nil, nil, nil
+		}
+		profileID = "common"
 	}
+	inst := profiles.NewInjector(p)
 	return &run.Profile{
 		ID:         profileID,
 		SourcePath: base,
-		Hash:       profileHash(p),
+		Hash:       p.ContentHash(),
 	}, inst, nil
 }
 
 // loadRunProfileInstance loads only the profile instance (used by the resume
 // path, which must not re-derive manifest metadata).
-func loadRunProfileInstance(ctx context.Context, root, name string, nameSet bool, spec string) (profiles.Injector, error) {
-	_, inst, err := loadRunProfile(ctx, root, name, nameSet, spec)
+func loadRunProfileInstance(ctx context.Context, r *runResolved, preset *editorial.Preset, intent runIntent) (profiles.Injector, error) {
+	root, spec, ok := selectProfile(preset, r, intent)
+	if !ok {
+		return nil, nil
+	}
+	_, inst, err := loadRunProfile(ctx, root, spec, preset != nil)
 	return inst, err
+}
+
+// profileEmpty reports whether a loaded profile carries no editorial content
+// (the engine's immutable core facts policy is always present and does not
+// count as profile content).
+func profileEmpty(p profiles.Profile) bool {
+	return p.Style == "" && p.Vocabulary == "" && p.OutputFormat == "" && len(p.Examples) == 0
 }

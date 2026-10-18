@@ -35,10 +35,13 @@ package profiles
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -634,4 +637,62 @@ func isValidAuthorName(name string) bool {
 		}
 	}
 	return true
+}
+
+// ValidateName checks that a profile name is safe to use both on the file
+// system and in the run manifest's Profile.ID: 1-100 characters from
+// [a-zA-Z0-9._-], with an alphanumeric first character.
+//
+// This is the stricter rule the manifest's profile-ID validation enforces;
+// sources of profile names (profile specs, editorial bundle references)
+// should validate with it so a loaded profile can always be recorded.
+func ValidateName(name string) error {
+	if name == "" {
+		return ErrPathEmpty
+	}
+	if len(name) > 100 {
+		return fmt.Errorf("profile name %q exceeds 100 characters", name)
+	}
+	first := name[0]
+	//nolint:staticcheck // This form is clearer than applying De Morgan's law
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9')) {
+		return fmt.Errorf("profile name %q must start with a letter or digit", name)
+	}
+	for _, c := range name {
+		//nolint:staticcheck // This form is clearer than applying De Morgan's law
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+			return fmt.Errorf("profile name %q is invalid: use letters, digits, '.', '-', '_' (1-100 chars)", name)
+		}
+	}
+	return nil
+}
+
+// ContentHash returns a deterministic digest of the merged profile content.
+//
+// The hash covers every content field (core facts policy, style, vocabulary,
+// output format) and every example (name and content, in sorted name order),
+// so two identically merged profiles always hash the same and any content
+// change changes the hash. It is the digest recorded on run manifests for
+// reproducibility.
+func (p Profile) ContentHash() string {
+	h := sha256.New()
+	h.Write([]byte(p.CoreFactsPolicy))
+	h.Write([]byte{0})
+	h.Write([]byte(p.Style))
+	h.Write([]byte{0})
+	h.Write([]byte(p.Vocabulary))
+	h.Write([]byte{0})
+	h.Write([]byte(p.OutputFormat))
+	keys := make([]string, 0, len(p.Examples))
+	for k := range p.Examples {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(p.Examples[k]))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

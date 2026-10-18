@@ -33,27 +33,29 @@ const (
 	SettingEmbeddingBaseURL = "embedding.base_url"
 	SettingEmbeddingModel   = "embedding.model"
 	// #nosec G101 -- setting-name constant, not a credential value
-	SettingEmbeddingAPIKey   = "embedding.api_key"
-	SettingEmbeddingTimeout  = "embedding.timeout"
-	SettingRerankEnabled     = "rerank.enabled"
-	SettingRerankModel       = "rerank.model"
-	SettingArchiveDBPath     = "archive.db_path"
-	SettingArchiveTopK       = "archive.top_k"
-	SettingArchiveFormat     = "archive.format"
-	SettingFetchTimeout      = "fetch.timeout"
-	SettingFetchMaxSize      = "fetch.max_size"
-	SettingFetchMaxWords     = "fetch.max_words"
-	SettingFetchParallel     = "fetch.parallel"
-	SettingChunkTargetSize   = "chunk.target_size"
-	SettingChunkMaxSize      = "chunk.max_size"
-	SettingChunkOverlapRatio = "chunk.overlap_ratio"
-	SettingProfilesRoot      = "profiles.root"
-	SettingProfilesName      = "profiles.name"
-	SettingDefaultsLanguage  = "defaults.language"
-	SettingOutputFormat      = "defaults.output_format"
-	SettingTemperature       = "defaults.temperature"
-	SettingMaxTokens         = "defaults.max_tokens"
-	SettingTone              = "defaults.tone"
+	SettingEmbeddingAPIKey      = "embedding.api_key"
+	SettingEmbeddingTimeout     = "embedding.timeout"
+	SettingRerankEnabled        = "rerank.enabled"
+	SettingRerankModel          = "rerank.model"
+	SettingArchiveDBPath        = "archive.db_path"
+	SettingArchiveTopK          = "archive.top_k"
+	SettingArchiveFormat        = "archive.format"
+	SettingFetchTimeout         = "fetch.timeout"
+	SettingFetchMaxSize         = "fetch.max_size"
+	SettingFetchMaxWords        = "fetch.max_words"
+	SettingFetchParallel        = "fetch.parallel"
+	SettingChunkTargetSize      = "chunk.target_size"
+	SettingChunkMaxSize         = "chunk.max_size"
+	SettingChunkOverlapRatio    = "chunk.overlap_ratio"
+	SettingProfilesRoot         = "profiles.root"
+	SettingProfilesName         = "profiles.name"
+	SettingEditorialBundle      = "editorial.bundle_root"
+	SettingEditorialPublication = "editorial.publication"
+	SettingDefaultsLanguage     = "defaults.language"
+	SettingOutputFormat         = "defaults.output_format"
+	SettingTemperature          = "defaults.temperature"
+	SettingMaxTokens            = "defaults.max_tokens"
+	SettingTone                 = "defaults.tone"
 )
 
 // Setting classifies one configuration value: its canonical name, the
@@ -167,6 +169,39 @@ func validateEnum(allowed ...string) validator {
 		}
 		return fmt.Errorf("must be one of %s, got %q", strings.Join(allowed, ", "), raw)
 	}
+}
+
+// validatePathNoTraversal accepts a path with no ".." segments.
+//
+// Absolute, relative, and tilde-style paths are all accepted; only an actual
+// traversal segment is rejected, because a ".." in a directory pointer lets
+// a config file reach outside the tree the operator meant to point at.
+func validatePathNoTraversal(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	for _, segment := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if segment == ".." {
+			return fmt.Errorf("%q must not contain '..' path segments", raw)
+		}
+	}
+	return nil
+}
+
+// publicationNameRe allows conservative publication preset identifiers.
+var publicationNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+// validatePublicationName accepts a conservative publication preset name.
+func validatePublicationName(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if !publicationNameRe.MatchString(raw) {
+		return fmt.Errorf("%q is not a valid publication name: use letters, digits, '.', '-', '_' (1-64 chars, must not start with a separator)", raw)
+	}
+	return nil
 }
 
 // Settings is the canonical, ordered table of every resolvable setting.
@@ -409,6 +444,20 @@ var Settings = []Setting{
 		kind:     kindString,
 		validate: validateAny,
 		file:     func(f File) (string, bool) { return str(f.Profiles.Name) },
+	},
+	{
+		Name:     SettingEditorialBundle,
+		EnvVar:   "NEWSROOM_EDITORIAL_BUNDLE",
+		kind:     kindString,
+		validate: validatePathNoTraversal,
+		file:     func(f File) (string, bool) { return str(f.Editorial.BundleRoot) },
+	},
+	{
+		Name:     SettingEditorialPublication,
+		EnvVar:   "NEWSROOM_PUBLICATION",
+		kind:     kindString,
+		validate: validatePublicationName,
+		file:     func(f File) (string, bool) { return str(f.Editorial.Publication) },
 	},
 	{
 		Name:     SettingDefaultsLanguage,

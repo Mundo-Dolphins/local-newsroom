@@ -187,14 +187,14 @@ func TestProfileHash(t *testing.T) {
 		Vocabulary: "v",
 		Examples:   map[string]string{"b": "2", "a": "1"},
 	}
-	h1 := profileHash(p)
-	h2 := profileHash(p)
+	h1 := p.ContentHash()
+	h2 := p.ContentHash()
 	if h1 == "" || h1 != h2 {
 		t.Errorf("hash not deterministic: %q vs %q", h1, h2)
 	}
 	p2 := p
 	p2.Style = "different"
-	if profileHash(p2) == h1 {
+	if p2.ContentHash() == h1 {
 		t.Error("hash must change with the content")
 	}
 }
@@ -206,13 +206,13 @@ func TestLoadRunProfileAuthorOnly(t *testing.T) {
 	writeProfileTree(t, root, ".", "javi") // publication "." == root itself
 
 	// No profile configured at all: nothing is loaded.
-	ref, inst, err := loadRunProfile(context.Background(), root, "", false, "")
+	ref, inst, err := loadRunProfile(context.Background(), root, "", false)
 	if err != nil || ref != nil || inst != nil {
 		t.Fatalf("no spec should produce no profile: ref=%+v inst=%v err=%v", ref, inst, err)
 	}
 
 	// A bare author name maps onto the root itself.
-	ref, inst, err = loadRunProfile(context.Background(), root, "", false, "javi")
+	ref, inst, err = loadRunProfile(context.Background(), root, "javi", false)
 	if err != nil {
 		t.Fatalf("author-only profile: %v", err)
 	}
