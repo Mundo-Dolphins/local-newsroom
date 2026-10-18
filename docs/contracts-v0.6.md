@@ -357,7 +357,7 @@ A plan, approval, attempt, or receipt that would carry a credential fails valida
 
 This issue (Mundo-Dolphins/local-newsroom#114) defines the **domain contract only**:
 
-- **No publisher implementations.** Nothing here talks to Bluesky, Hugo, Git, or any external API. The publisher is a later v0.6 component that *consumes* `AuthorizesPublish` and *produces* receipts.
+- **No publisher implementations.** Nothing here talks to Bluesky, Hugo, Git, or any external API. The publisher is a later v0.6 component that *consumes* `AuthorizesPublish` and *produces* receipts. (The Hugo static-site *staging adapter* — rendered article to `content/` file, plan-agnostic, no receipts — has landed separately as `internal/hugo`; see [hugo-publication.md](hugo-publication.md).)
 - **No filesystem or network I/O.** The package is pure serializable documents and state machines, mirroring `internal/run`; persistence and orchestration are wired in the follow-up v0.6 issues.
 - **No content storage.** Plans reference artifacts by digest; rendered bytes stay in the run directory.
 
