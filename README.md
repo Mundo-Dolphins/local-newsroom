@@ -178,7 +178,13 @@ The engine-side counterpart for a Hugo destination is the staging adapter in
 turns a READY rendered article into a site-ready content file inside a Hugo
 tree — deterministic path, safe front matter, draft by default, explicit
 overwrite, atomic writes, dry-run capable — and stages only (no Git, no
-network). The bundle's `hugo.yaml` destination feeds it.
+network). The bundle's `hugo.yaml` destination feeds it. The local-Git half
+of the v0.6 story is the committing adapter in `internal/gitpub`
+([docs/git-publication.md](docs/git-publication.md)): it takes those staged
+files and commits them on a dedicated branch of the site's existing checkout
+— clean-tree required, only the expected files staged, configurable commit
+message, idempotent retries, dry-run, receipt with commit SHA + branch — and
+stops there: it never pushes, merges, or rewrites history.
 
 ## Research Command
 
