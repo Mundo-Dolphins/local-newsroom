@@ -186,6 +186,16 @@ files and commits them on a dedicated branch of the site's existing checkout
 message, idempotent retries, dry-run, receipt with commit SHA + branch — and
 stops there: it never pushes, merges, or rewrites history.
 
+The remote half of the v0.6 story is the social publisher in
+`internal/bluesky` ([docs/bluesky-publication.md](docs/bluesky-publication.md)),
+backed by the generic `Publisher` types in `internal/social`: it publishes
+approved posts to a Bluesky account as a thread over the official AT Protocol
+xrpc surface (`createSession` + `createRecord`) — app password via
+environment variable only, in-memory JWTs that rotate on expiry/401, grapheme
+and byte validation before any write, deterministic link facets with byte
+offsets, strong-ref reply chaining, resumable partial failures, dry-run with
+zero network, and a digest-bound receipt naming the post AT URIs.
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates
