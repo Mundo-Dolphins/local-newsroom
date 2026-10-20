@@ -60,4 +60,14 @@ var (
 	// publisher bound for it. The cycle is refused before any state
 	// change: binding the publisher and retrying is the fix.
 	ErrPublisherNotBound = errors.New("no publisher is bound for a target that must be published")
+
+	// ErrInterrupted indicates the publication cycle was interrupted before
+	// it completed (a cancelled context, or a state-recording failure): the
+	// persisted plan is left in publishing with its in-flight targets
+	// aborted, and it is the resume point — call Publish again with a
+	// healthy context to resume. The interruption itself is not a target
+	// failure: whatever external effects the interrupted calls produced are
+	// unproven, so the orchestrator surfaces them as manual verification,
+	// never as an automatic rollback.
+	ErrInterrupted = errors.New("publication cycle was interrupted before completion")
 )

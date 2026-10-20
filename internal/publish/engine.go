@@ -344,7 +344,7 @@ func (e *Engine) finishCycleAborted(m *run.Manifest, plan *publication.Plan, cau
 	if perr := e.persistPlan(m, plan); perr != nil {
 		return nil, perr
 	}
-	return plan, fmt.Errorf("publication cycle for %s interrupted: %w (in-flight targets aborted; resume by calling Publish again)", plan.ID, cause)
+	return plan, fmt.Errorf("%w: %s: %v (in-flight targets aborted; resume by calling Publish again)", ErrInterrupted, plan.ID, cause)
 }
 
 // failTarget records a target failure with the plan and manifest persisted,

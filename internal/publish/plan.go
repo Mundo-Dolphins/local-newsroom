@@ -231,9 +231,36 @@ func (e *Engine) sanitizeSeparatedContent(name string, content []byte) ([]byte, 
 // content file that changed since the plan was created forces a re-baseline
 // first (RefreshArtifact) rather than silently approving different bytes
 // than the plan shows.
+//
+// Approve is the CLI-facing shortcut for ApproveWith: method cli, no note,
+// full scope (every target of the plan).
 func (e *Engine) Approve(ctx context.Context, runID run.RunID, planID publication.PublicationID, approvedBy string, bundle *review.Bundle) (*publication.Plan, error) {
+	return e.ApproveWith(ctx, runID, planID, approvedBy, publication.ApprovalMethodCLI, "", nil, bundle)
+}
+
+// ApproveWith records an explicit human approval with a caller-selected
+// approval method (cli | tui | manual | custom), a note, and an optional
+// target scope (empty = every target of the plan).
+//
+// The approval is bound to the exact content bytes on disk at approval
+// time: the file is re-read and digested, the digest must still match the
+// plan baseline (else the approval would cover different bytes than the
+// plan shows), and the gate evidence is re-gathered from the same bytes (a
+// non-passing gate refuses the approval — an approval of an artifact that
+// is not READY is not an approval of something publishable).
+//
+// The method, note, and scope are audit details: they record the surface
+// the human used and their own words (redacted on construction). A
+// terminal plan cannot be approved again: publishing again is a new plan.
+func (e *Engine) ApproveWith(ctx context.Context, runID run.RunID, planID publication.PublicationID, approvedBy string, method publication.ApprovalMethod, note string, targets []publication.TargetID, bundle *review.Bundle) (*publication.Plan, error) {
 	if approvedBy == "" {
 		return nil, fmt.Errorf("an approver identity is required to approve plan %s", planID)
+	}
+	if method == "" {
+		method = publication.ApprovalMethodCLI
+	}
+	if !method.Valid() {
+		return nil, fmt.Errorf("approval method %q is not valid: %v", method, publication.AllApprovalMethods)
 	}
 	pctx, err := e.loadPlanContext(runID, planID)
 	if err != nil {
@@ -268,7 +295,7 @@ func (e *Engine) Approve(ctx context.Context, runID run.RunID, planID publicatio
 		return nil, fmt.Errorf("recording gate evidence for %s: %w", plan.ID, err)
 	}
 
-	approval := publication.NewApproval(plan.ID, approvedBy, publication.ApprovalMethodCLI, currentDigest, nil, "", at)
+	approval := publication.NewApproval(plan.ID, approvedBy, method, currentDigest, targets, note, at)
 	if err := plan.Approve(approval, at); err != nil {
 		return nil, fmt.Errorf("approving %s: %w", plan.ID, err)
 	}

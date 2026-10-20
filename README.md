@@ -207,6 +207,18 @@ cycle idempotently — a target that holds a receipt is never re-executed, a
 dangling in-flight target is aborted rather than blindly retried, and a
 changed artifact invalidates its approval by digest.
 
+On top of the persistence layer sits the publication orchestrator in
+`internal/publish` ([docs/publication-orchestrator.md](docs/publication-orchestrator.md)):
+it drives the full pipeline for a run — ready check, plan, dry-run
+preview, human approval, execution in dependency order, and the final
+publication summary — and it is deliberately UI-independent: it never
+prompts or renders anything, it presents the approval screen as data
+(run/topic, artifact digest, destinations, exact branch/path or post
+count, dry-run results, warnings) and receives the approval as a domain
+value. A later failure never deletes what is already public: the summary
+names what exists where and gives the manual next steps (verify, complete,
+retry, push/merge the local commit, or re-approve a new plan).
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates
