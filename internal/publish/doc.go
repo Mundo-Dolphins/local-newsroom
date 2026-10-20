@@ -41,15 +41,33 @@
 //
 // # Usage
 //
+// The Orchestrator is the primary entry point: it drives the full pipeline
+// (ready check, plan, dry-run/preview, approval, publish, summary) for one
+// run and presents every human-facing projection as data — it has no
+// interactive UI, and the approval is a domain input:
+//
 //	store := workspace.New(root, sanitizer)          // implements publish.Store
 //	eng := publish.New(store)
-//	plan, _ := eng.CreatePlan(ctx, runID, req, bundle)   // plan + gate
-//	plan, _ = eng.Approve(ctx, runID, plan.ID, "human", bundle)
-//	plan, _ = eng.Publish(ctx, runID, publishers, publish.Options{})
+//	var bundle review.Bundle                         // the run's review evidence
+//	orch := publish.NewOrchestrator(eng, runID, &bundle)
+//	orch.SetPublishers(map[publication.TargetID]publish.Publisher{
+//		"site":   publish.NewGitPublisher(gitPub, planID, "site", path, title, runID),
+//		"thread": publish.NewBlueskyPublisher(blueskyPub, planID, "thread"),
+//	})
+//	ready, _   := orch.Ready(ctx, req)               // the pre-publication gate
+//	plan, _    := orch.Prepare(ctx, req)             // the plan (reused if active)
+//	screen, _  := orch.Preview(ctx, plan.ID)         // the approval screen's data
+//	// ... the presenting surface collects the human decision ...
+//	plan, _, _ = orch.Approve(ctx, plan.ID, publish.Approval{ApprovedBy: "editor"})
+//	summary, _ := orch.Publish(ctx, plan.ID)         // the final summary
 //
-// workspace.Store satisfies Store, so real callers and tests share one
-// implementation of the persistence boundary. Concrete publishers are
-// bound per target: the Bluesky and git bridges (NewBlueskyPublisher,
-// NewGitPublisher) adapt the existing adapters; a PublisherFunc is the
-// escape hatch for anything else.
+// The Engine is the layer underneath: CreatePlan, ApproveWith, Publish, and
+// the state mutations (RecordDryRun, RevokeApproval, Cancel, ...) for
+// callers that want the plan lifecycle directly. workspace.Store satisfies
+// Store, so real callers and tests share one implementation of the
+// persistence boundary. Concrete publishers are bound per target: the
+// Bluesky and git bridges (NewBlueskyPublisher, NewGitPublisher) adapt the
+// existing adapters and also implement Previewer, so the approval screen
+// gets the adapter's own facts (branch, path, post count) from the preview;
+// a PublisherFunc is the escape hatch for anything else.
 package publish
