@@ -640,7 +640,7 @@ func (b *Bundle) renderArtifact(out *strings.Builder) {
 func (b *Bundle) renderOutput(out *strings.Builder) {
 	out.WriteString("## Output artifacts\n\n")
 
-	ready, why := readiness(b)
+	ready, why := Readiness(b)
 	if ready {
 		fmt.Fprintf(out, "> **READY** — %s\n\n", why)
 	} else {
@@ -661,11 +661,17 @@ func (b *Bundle) renderOutput(out *strings.Builder) {
 	out.WriteString("\n")
 }
 
-// readiness decides whether the run's output may be presented as ready.
+// Readiness decides whether the run's output may be presented as ready.
+//
 // The rule is deliberately strict: only a succeeded run whose final
 // factual check passed is ever described as ready; everything else
 // (failed gate, failed run, cancelled run, missing check) is not.
-func readiness(b *Bundle) (bool, string) {
+//
+// This is the single readiness rule of the review model: the rendered
+// review bundle and the v0.6 publication gate (internal/publish) apply
+// the exact same decision, so what a human is told and what a
+// publisher is allowed to do never diverge.
+func Readiness(b *Bundle) (bool, string) {
 	if b.Status != run.RunStatusSucceeded {
 		switch b.Status {
 		case run.RunStatusFailed:

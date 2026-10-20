@@ -54,6 +54,26 @@ const (
 	ArtifactPathThread = "output/thread.txt"
 )
 
+// Publication layout inside the run directory (v0.6 controlled publication).
+//
+// Publication state is a post-run state, not a pipeline stage: it lives in
+// its own directory so the v0.5 stage layout (and every historical manifest
+// that references it) stays untouched.
+const (
+	// PublicationDir is the publication state directory of a run.
+	PublicationDir = "publication"
+
+	// PublicationPlansDir holds the versioned publication plan documents,
+	// one file per plan: publication/plans/<plan-id>.json. A run keeps its
+	// full plan history here; the manifest references only the latest.
+	PublicationPlansDir = "publication/plans"
+
+	// PublicationContentDir holds the approved content files that a plan's
+	// artifact identity is baselined to (e.g. the canonical NUL-joined
+	// thread text): publication/content/<name>.
+	PublicationContentDir = "publication/content"
+)
+
 // ReviewFileName is the file name of the human review bundle inside the run
 // directory. The bundle is a run-directory file (like the manifest), not a
 // stage artifact: it is written after the run reaches a terminal state and is

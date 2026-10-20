@@ -1,8 +1,8 @@
 # Local Newsroom Publication Contracts (v0.6)
 
 Version: v0.6 (Publication domain contract)
-Status: Implemented in `internal/publication`
-Updated: 2026-10-16
+Status: Implemented in `internal/publication` (domain) and `internal/publish` (persistence + engine, issue #119)
+Updated: 2026-07-21
 
 This document defines the v0.6 publication contract: the machine-readable **publication plan** and its companions (targets, approvals, attempts, receipts, dry runs) that control the first external side effects the newsroom can perform.
 
@@ -47,6 +47,7 @@ Related documents:
 17. [Serialization and Versioning](#17-serialization-and-versioning)
 18. [Redaction: No Credentials, Ever](#18-redaction-no-credentials-ever)
 19. [What This Contract Does Not Do](#19-what-this-contract-does-not-do)
+20. [Persistence and Idempotent Resume/Retry](#20-persistence-and-idempotent-resumetry)
 
 ---
 
@@ -358,7 +359,64 @@ A plan, approval, attempt, or receipt that would carry a credential fails valida
 This issue (Mundo-Dolphins/local-newsroom#114) defines the **domain contract only**:
 
 - **No publisher implementations.** Nothing here talks to Bluesky, Hugo, Git, or any external API. The publisher is a later v0.6 component that *consumes* `AuthorizesPublish` and *produces* receipts. (The Hugo static-site *staging adapter* — rendered article to `content/` file, plan-agnostic, no receipts — has landed separately as `internal/hugo`; see [hugo-publication.md](hugo-publication.md). The Git *committing adapter* — staged files to a local commit on a dedicated branch, producing receipts with commit SHA + branch, never pushing — has landed separately as `internal/gitpub`; see [git-publication.md](git-publication.md). The Bluesky *social publisher* — approved posts to a thread over the AT Protocol, producing receipts with the post AT URIs, resumable and dry-run capable — has landed separately as `internal/bluesky` on the generic `internal/social` publisher types; see [bluesky-publication.md](bluesky-publication.md).)
-- **No filesystem or network I/O.** The package is pure serializable documents and state machines, mirroring `internal/run`; persistence and orchestration are wired in the follow-up v0.6 issues.
+- **No filesystem or network I/O.** The `internal/publication` package is pure serializable documents and state machines, mirroring `internal/run`. Persistence, the engine, and the publisher adapters are the `internal/publish` layer added by issue #119 (section 20).
 - **No content storage.** Plans reference artifacts by digest; rendered bytes stay in the run directory.
 
 The contract is complete when: a run cannot publish on its own; a human approval to exact bytes is the only thing that can; every external effect leaves a durable, secret-free, digest-bound record; and a failed half-way cycle can be resumed without double-publishing.
+
+## 20. Persistence and Idempotent Resume/Retry
+
+Issue [Mundo-Dolphins/local-newsroom#119](https://github.com/Mundo-Dolphins/local-newsroom/issues/119) wires this contract into the run/workspace persistence layer, implemented in [`internal/publish`](../internal/publish/). Publication is a **post-run state**, not a pipeline stage: the v0.5 stage graph is untouched, the run must be `succeeded` and the review bundle `READY`, and the plan document is the durable record of the publication itself.
+
+### Run directory layout
+
+```
+runs/<run-id>/
+  manifest.json                 # run manifest, schema 0.6.0 (gains publication_state)
+  sources/ fetch/ documents/ research/ verify/ final_check/ output/   # v0.5 trees, unchanged
+  publication/
+    plans/<plan-id>.json        # the complete plan document (this contract, schema 0.6.0)
+    content/<name>              # derived publication content (e.g. the canonical NUL-joined thread)
+```
+
+The plan document is persisted through the workspace store's artifact path (the single sanitization boundary) and is referenced — never embedded — from the manifest's new optional `publication_state` summary: plan reference (`plan_id`, `plan_path`), `plan_hash`, plan status, and target counts. See [contracts-v0.5.md §12](contracts-v0.5.md#12-serialization-and-versioning): manifests written at `0.5.0` load unchanged with `publication_state` absent.
+
+### What is persisted where
+
+| Persisted data | Where | Boundary |
+|---|---|---|
+| plan (targets, gate, artifact identity, status, warnings) | `publication/plans/<plan-id>.json` | sanitized; hashed after read-back |
+| approval records (method, digest-bound, status) | inside the plan document | redacted free text; validated on load |
+| approved artifact hash (digest) | plan artifact identity + each approval | `sha256:<64 hex>` |
+| per-target status, attempts (full history) | plan targets | validated on load |
+| receipts (external URIs/record IDs, content digest) | plan targets | absolute-URL rule; digest must match the plan |
+| partial success + retry information | plan status + attempt history | `RefreshStatus` aggregation |
+| timestamps | plan, attempts, manifest summary | monotonic; regressions rejected |
+| plan summary for the run | manifest `publication_state` | sanitized with the manifest |
+
+### Read-back discipline (why hashes stay honest)
+
+Sanitization can change bytes on the way to disk, so every persisted document is **re-read and digested after writing**: `plan_hash` is the digest of the sanitized bytes actually on disk, and the approval/plan chain is validated against that digest. On load, the engine cross-checks the persisted plan document against the manifest's recorded `plan_hash`: a mismatch means the document changed after the manifest was written, and the load fails closed (`ErrPlanInvalid`) rather than trusting either side.
+
+### Idempotent resume
+
+`publish.Engine.Publish` is safe to call any number of times over the same store — including across process restarts. Per target, the persisted status decides what a new cycle does:
+
+| Target status at resume | What a new cycle does |
+|---|---|
+| `succeeded` | never touched — the receipt is the dedup proof; no external call |
+| `skipped` | never touched — the skip was a deliberate decision |
+| `planned` | executed (only if the plan is authorized) or blocked on an incomplete dependency |
+| `failed` | re-executed with a new attempt number; a previously recorded receipt is passed to the publisher as prior progress |
+| `partially_succeeded` | re-executed; the partial receipt's external record IDs are passed so the publisher deduplicates what it already did (a half-posted thread is completed, never reposted) |
+| `publishing` (dangling — the process died mid-call) | aborted to `cancelled` — the external outcome is unproven, so the target is never blindly re-executed within this plan; re-publishing is a new plan |
+
+The engine persists the plan after every state transition, so a crash leaves a document that validates and resumes honestly. Publisher outcomes map to state: a receipt with no error succeeds the target; a receipt *with* an error records partial success (resumable); an error without a receipt fails the target; and a receipt that fails validation (wrong content digest, malformed) is discarded and the target fails — a success without matching proof is not a success.
+
+### Sanitization at the publication boundary
+
+Every plan, receipt, reason, and content byte crosses the same single workspace sanitization boundary as v0.5 content. One classification rule is specific to the canonical thread form: NUL-separated content that is text (each NUL segment valid UTF-8) is sanitized per segment with the full pattern detectors, and a segment that is still dirty after sanitization fails the write (fail closed) — because the store's binary class would otherwise skip the detectors on NUL-joined bytes and let a leaked token reach disk. The bytes persisted are the sanitized bytes, and the plan baselines exactly those.
+
+### Publisher adapters
+
+`internal/publish` ships the two digest-binding bridges the CLI wires up (issue #121): `NewBlueskyPublisher` (splits the canonical NUL-joined thread content into posts, hands the plan's prior receipt to `internal/social`, and returns a receipt over the real post URIs) and `NewGitPublisher` (one file, one commit; an already-committed identical file is skipped, so a retried cycle never duplicates the local commit).

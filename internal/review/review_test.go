@@ -58,7 +58,7 @@ func TestBuildSucceededRun(t *testing.T) {
 	if len(b.OutputPaths) != 1 || len(b.OutputMissing) != 0 {
 		t.Fatalf("output = %v / missing %v", b.OutputPaths, b.OutputMissing)
 	}
-	ready, why := readiness(b)
+	ready, why := Readiness(b)
 	if !ready {
 		t.Fatalf("readiness = false: %s", why)
 	}
@@ -92,7 +92,7 @@ func TestBuildFailedFinalCheckRun(t *testing.T) {
 	if b.FollowUpPresent != true || b.FollowUpRounds != 2 || len(b.FollowUpUnresolved) != 1 {
 		t.Fatalf("follow-up = %+v", b)
 	}
-	ready, why := readiness(b)
+	ready, why := Readiness(b)
 	if ready {
 		t.Fatalf("readiness = true for a failed run: %s", why)
 	}
@@ -128,7 +128,7 @@ func TestBuildFailedResearchRun(t *testing.T) {
 	if b.FetchFailed != 1 {
 		t.Fatalf("fetch failed = %d, want 1", b.FetchFailed)
 	}
-	ready, _ := readiness(b)
+	ready, _ := Readiness(b)
 	if ready {
 		t.Fatal("readiness = true for a failed run")
 	}
@@ -167,7 +167,7 @@ func TestBuildCancelledRun(t *testing.T) {
 	if b.Status != run.RunStatusCancelled {
 		t.Fatalf("status = %s, want cancelled", b.Status)
 	}
-	ready, why := readiness(b)
+	ready, why := Readiness(b)
 	if ready {
 		t.Fatalf("readiness = true for a cancelled run: %s", why)
 	}
@@ -251,7 +251,7 @@ func TestBuildSucceededRunWithoutCheckFile(t *testing.T) {
 	if len(b.BuildNotes) == 0 {
 		t.Fatal("missing succeeded-stage artifact must produce a build note")
 	}
-	ready, why := readiness(b)
+	ready, why := Readiness(b)
 	if ready {
 		t.Fatalf("readiness = true without gate evidence: %s", why)
 	}
@@ -472,7 +472,7 @@ func TestReadinessMatrix(t *testing.T) {
 			if tc.outputMissing {
 				b.OutputMissing = []string{"/x/write/artifact.brief.md"}
 			}
-			ready, why := readiness(b)
+			ready, why := Readiness(b)
 			if ready != tc.wantReady {
 				t.Fatalf("readiness = %v (%s), want %v", ready, why, tc.wantReady)
 			}

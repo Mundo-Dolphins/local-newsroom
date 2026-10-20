@@ -181,9 +181,25 @@ func TestTargetValidate(t *testing.T) {
 		"skipped with secret reason": {func(t *PublicationTarget) { t.Status = StatusSkipped; t.SkipReason = testToken }, "secret-looking"},
 		"failed without error":       {func(t *PublicationTarget) { t.Status = StatusFailed }, "no error summary"},
 		"succeeded without receipt":  {func(t *PublicationTarget) { t.Status = StatusSucceeded }, "no receipt"},
-		"receipt on a failed target": {func(t *PublicationTarget) { t.Status = StatusFailed; t.Error = runError(); t.Receipt = baseReceipt() }, "receipts belong"},
-		"planned with attempts":      {func(t *PublicationTarget) { t.Attempts = []PublicationAttempt{NewAttempt(1, tAt(1))} }, "carries"},
-		"long skip reason":           {func(t *PublicationTarget) { t.Status = StatusSkipped; t.SkipReason = strings.Repeat("s", maxNoteLen+1) }, "exceeds"},
+		"planned with a receipt":     {func(t *PublicationTarget) { t.Receipt = baseReceipt() }, "external proof"},
+		"failed keeps its resume receipt": {func(t *PublicationTarget) {
+			ts := run.NewTimestamp(tAt(1))
+			e := runError()
+			a := PublicationAttempt{Number: 1, Status: AttemptStatusFailed, StartedAt: ts, FinishedAt: &ts, Error: e, Receipt: baseReceipt()}
+			t.Status = StatusFailed
+			t.Error = e
+			t.Receipt = baseReceipt()
+			t.Attempts = []PublicationAttempt{a}
+		}, ""},
+		"failed with a malformed carried receipt": {func(t *PublicationTarget) {
+			t.Status = StatusFailed
+			t.Error = runError()
+			r := baseReceipt()
+			r.ContentDigest = Digest("garbage")
+			t.Receipt = r
+		}, "invalid receipt"},
+		"planned with attempts": {func(t *PublicationTarget) { t.Attempts = []PublicationAttempt{NewAttempt(1, tAt(1))} }, "carries"},
+		"long skip reason":      {func(t *PublicationTarget) { t.Status = StatusSkipped; t.SkipReason = strings.Repeat("s", maxNoteLen+1) }, "exceeds"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

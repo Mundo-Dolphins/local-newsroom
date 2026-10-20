@@ -1,24 +1,29 @@
 # Local Newsroom Run Manifest Contracts (v0.5)
 
-Version: v0.5 (Run & Workspace persistence contract)
+Version: v0.5 (Run & Workspace persistence contract); manifest schema 0.6.0 as of the v0.6 release
 Status: Implemented in `internal/run`
 Updated: 2026-07-21
 
 This document defines the v0.5 persistence contract: the machine-readable **run manifest** that records one complete newsroom pipeline run, so that every run is reproducible, inspectable, and resumable.
 
+**Schema lineage.** The manifest document is semver-versioned in `schema_version`. v0.5 shipped schema `0.5.0`. The v0.6 release advances it to `0.6.0` by adding one optional field — `publication_state`, the manifest's summary of the v0.6 publication state defined in [contracts-v0.6.md](contracts-v0.6.md) — with no other field changes. Manifests written at `0.5.0` (and every other `0.x` document) load unchanged in v0.6 binaries, with `publication_state` absent (a `nil` `PublicationState` in Go). The version bump is a reader contract, not a data migration: nothing is rewritten in place.
+
 The contract is implemented in the [`internal/run`](../internal/run/) package:
 
 | File | Contents |
 |---|---|
-| `manifest.go` | `Manifest`, `RunID`, `Workspace`, `SourceMode`, `Profile`, `ModelMetadata`, `ConfigSnapshot`, `Warning`, `ErrorSummary`, `ArtifactRef`, `Result`, lifecycle mutators, `Validate`, `MarshalManifest` / `UnmarshalManifest` |
+| `manifest.go` | `Manifest`, `RunID`, `Workspace`, `SourceMode`, `Profile`, `ModelMetadata`, `ConfigSnapshot`, `Warning`, `ErrorSummary`, `ArtifactRef`, `Result`, `PublicationState` (v0.6), lifecycle mutators, `Validate`, `MarshalManifest` / `UnmarshalManifest` |
 | `status.go` | `RunStatus`, `StageStatus`, `AttemptStatus` rules, canonical stage list, transition validators |
 | `stage.go` | `StageRecord`, `StageAttempt` + validation |
+| `stage_paths.go` | canonical run-directory layout, including the v0.6 `publication/` tree |
+| `publication_status.go` | the mirrored v0.6 publication status vocabulary (run cannot import `internal/publication` without an import cycle) |
 | `timestamp.go` | `Timestamp` (UTC, RFC 3339 nano) |
 | `redact.go` | `RedactSecrets`, `RedactSecretsCounted`, `LooksLikeSecret`, `IsSecretKey`, `RedactedPlaceholder` |
 | `sanitizer.go` | `Sanitizer`, `NewSanitizer` — the single redaction boundary (exact configured values + pattern detectors) |
 
 Related documents:
 
+- [`contracts-v0.6.md`](contracts-v0.6.md) — the v0.6 publication contract: plan, approval, gate, receipts, and the persistence layout this manifest summarizes
 - [`contracts-v0.4.md`](contracts-v0.4.md) — per-stage data contracts (unchanged in v0.5)
 - [`tui-v0.5.md`](tui-v0.5.md) — the keyboard-first TUI that renders these manifests
 - [`workflow-v0.2.md`](workflow-v0.2.md) — pipeline and stages
@@ -188,6 +193,16 @@ Attempts are never `pending` or `skipped`: skipping is a stage-level decision, w
   ],
   "errors": [],
   "result": { "outcome": "succeeded" },
+  "publication_state": {
+    "plan_id": "pub-20240115T120300Z-1b2c3d4e5f60",
+    "plan_path": "publication/plans/pub-20240115T120300Z-1b2c3d4e5f60.json",
+    "plan_hash": "sha256:9f2c…e7a1",
+    "status": "succeeded",
+    "targets": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "updated_at": "2024-01-15T12:04:05Z"
+  },
   "started_at": "2024-01-15T12:00:00Z",
   "updated_at": "2024-01-15T12:02:11Z",
   "finished_at": "2024-01-15T12:02:11Z"
@@ -196,7 +211,7 @@ Attempts are never `pending` or `skipped`: skipping is a stage-level decision, w
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | `0.5.0` for this contract. Semantic version; consumers gate on the major. |
+| `schema_version` | string | `0.6.0` as of the v0.6 release (`0.5.0` in v0.5 documents; both load in v0.6). Semantic version; consumers gate on the major. |
 | `id` | string | `RunID`, see [Run Identity](#2-run-identity). |
 | `workspace` | object | Name + optional path. |
 | `status` | enum | Current run status. |
@@ -210,6 +225,7 @@ Attempts are never `pending` or `skipped`: skipping is a stage-level decision, w
 | `warnings` | array, optional | Non-fatal warnings. |
 | `errors` | array, optional | Run-level error summaries (stage errors live on attempts). |
 | `result` | object | Terminal result: outcome, reason, optional `failed_stage`. Empty while in progress. |
+| `publication_state` | object, optional (v0.6) | Summary of the run's latest publication plan: plan reference (`plan_id`, `plan_path`), `plan_hash` (digest of the persisted plan document bytes), plan `status`, target counts, `updated_at`. The full plan — approvals, attempts, receipts, warnings — lives in the plan document, never here. Absent on v0.5 manifests. See [contracts-v0.6.md](contracts-v0.6.md). |
 | `started_at` | timestamp | Set at creation (defaults to "now" if not provided). |
 | `updated_at` | timestamp | Monotonic; updated on every lifecycle event. |
 | `finished_at` | timestamp, nullable | Set exactly when the run reaches a terminal status. |
@@ -474,9 +490,10 @@ succeeded/skipped ──InvalidateStage──▶ pending   (out-of-band reset on
 
 - Wire format: JSON. `MarshalManifest` produces compact 2-space-indented JSON; `UnmarshalManifest` parses and runs the full `Validate()`.
 - `Timestamp` serializes as RFC 3339 with up to nanosecond precision (trailing zeros trimmed; zero values marshal as `null`).
-- `schema_version` is a semantic version string (`0.5.0`).
+- `schema_version` is a semantic version string (`0.6.0` in v0.6; `0.5.0` documents from v0.5 remain fully supported).
   - `UnmarshalManifest` and `Validate` accept only the current major (`0`); other majors yield `ErrUnsupportedSchemaVersion`.
   - Unknown *fields* within the current major are ignored (forward compatibility across 0.x patches); unknown *enum values* are rejected.
+  - The 0.5.0 → 0.6.0 change adds one optional field (`publication_state`), so v0.5 documents load and validate unchanged with a nil `PublicationState` (covered by `publication_manifest_test.go`).
 - Round trips are lossless: `unmarshal(marshal(m)) == m`, and re-marshaling is byte-stable (covered by `roundtrip_test.go`).
 
 Future schema changes: bump the patch/minor and update the JSON Schema and this document; bump the major only when a documented consumer rule changes incompatibly.
@@ -583,4 +600,4 @@ redact their own structures:
 
 ## 15. Schema File
 
-`schemas/run-manifest.json` (draft-07) mirrors the structure above: required fields, enum values, ID patterns, and timestamp formats. It documents and sanity-checks the wire format; the Go `Validate()` remains the authoritative gate, since JSON Schema cannot express the cross-field consistency rules (run↔stage↔attempt, outcome↔status, timestamp ordering).
+`schemas/run-manifest.json` (draft-07) mirrors the structure above: required fields, enum values, ID patterns, and timestamp formats. It documents and sanity-checks the wire format; the Go `Validate()` remains the authoritative gate, since JSON Schema cannot express the cross-field consistency rules (run↔stage↔attempt, outcome↔status, timestamp ordering). The v0.6 addition (`publication_state`, optional) is included as an object property with the same patterns and status enum the Go validation enforces.

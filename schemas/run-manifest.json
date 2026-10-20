@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/Mundo-Dolphins/local-newsroom/schemas/run-manifest.json",
   "title": "RunManifest",
-  "description": "A run manifest: the machine-readable record of one complete newsroom pipeline run (v0.5 persistence contract). A run is reproducible and inspectable: it records the workspace, topic, source mode, profile and model metadata, a redacted configuration snapshot, the full stage lifecycle with attempt history, and every artifact produced. The manifest is the durable record of the run; workspace files are derived, reproducible artifacts. Cross-field consistency rules (status vs. stage states, outcome vs. status, timestamps) are enforced by internal/run and documented in docs/contracts-v0.5.md.",
+  "description": "A run manifest: the machine-readable record of one complete newsroom pipeline run (v0.5 persistence contract, extended by v0.6). A run is reproducible and inspectable: it records the workspace, topic, source mode, profile and model metadata, a redacted configuration snapshot, the full stage lifecycle with attempt history, every artifact produced, and — since schema 0.6.0 — an optional publication_state summary pointing at the run's latest persisted publication plan (internal/publication). The manifest is the durable record of the run; workspace files are derived, reproducible artifacts. Cross-field consistency rules (status vs. stage states, outcome vs. status, timestamps) are enforced by internal/run and documented in docs/contracts-v0.5.md and docs/contracts-v0.6.md.",
   "type": "object",
   "required": [
     "schema_version",
@@ -76,6 +76,21 @@
         "hash": { "type": "string", "pattern": "^[0-9a-f]{8,128}$", "description": "Digest of the resolved non-secret preset content, so a bundle that changed on disk is detectable." }
       },
       "description": "The publication preset selected for this run, when one was selected. Identity and provenance only: private bundle content (style text, handles, destination URLs) is never recorded."
+    },
+    "publication_state": {
+      "type": "object",
+      "required": ["plan_id", "plan_path", "plan_hash", "status", "targets", "succeeded", "failed", "updated_at"],
+      "properties": {
+        "plan_id": { "type": "string", "pattern": "^pub-[a-zA-Z0-9._-]{1,128}$", "description": "ID of the run's latest publication plan." },
+        "plan_path": { "type": "string", "description": "Run-relative path of the plan document (publication/plans/<plan-id>.json)." },
+        "plan_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the persisted plan document bytes (tamper detection)." },
+        "status": { "enum": ["planned", "approved", "publishing", "succeeded", "failed", "partially_succeeded", "cancelled", "skipped"], "description": "The plan status (v0.6 publication vocabulary, mirrored in the manifest)." },
+        "targets": { "type": "integer", "minimum": 0, "description": "The plan's target count." },
+        "succeeded": { "type": "integer", "minimum": 0, "description": "Targets with status succeeded." },
+        "failed": { "type": "integer", "minimum": 0, "description": "Targets with status failed." },
+        "updated_at": { "type": "string", "format": "date-time", "description": "The plan's last state transition time (UTC)." }
+      },
+      "description": "Summary of the run's latest persisted publication plan (v0.6, schema 0.6.0). The full plan (targets, approvals, receipts, attempts) is the separate document at plan_path; this summary never embeds it. Absent when the run has no publication state yet — every 0.5.0 manifest loads with this field nil."
     },
     "model": {
       "$ref": "#/definitions/modelMetadata"
