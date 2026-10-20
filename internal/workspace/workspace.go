@@ -576,6 +576,58 @@ func (s *Store) LoadArtifact(id run.RunID, relPath string) ([]byte, error) {
 	return data, nil
 }
 
+// ListArtifacts lists the regular files directly inside one run-relative
+// directory (e.g. "publication/plans"), returning their run-relative paths
+// (forward slashes) sorted by path.
+//
+// The path-safety rules are identical to LoadArtifact: the directory is
+// canonicalized (traversal rejected) and the joined path is re-validated
+// after symlink resolution, so a symlinked subdirectory pointing outside the
+// workspace cannot be listed. Subdirectories themselves are not returned;
+// only regular files directly in the named directory. Sidecar files (the
+// ".redacted" metadata companions) are excluded.
+func (s *Store) ListArtifacts(id run.RunID, relDir string) ([]string, error) {
+	rel, err := canonicalRelPath(relDir)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := s.RunDir(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.assertRunDir(dir); err != nil {
+		return nil, err
+	}
+	if err := s.assertInsideRoot(dir); err != nil {
+		return nil, err
+	}
+	full := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := s.assertInsideRoot(full); err != nil {
+		return nil, err
+	}
+	// #nosec:G304 -- rel is validated by canonicalRelPath (relative, no
+	// "..", no backslashes, no NUL) and the joined path is re-validated by
+	// assertInsideRoot (symlink-resolved, must stay inside the workspace
+	// root) immediately above.
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		return nil, fmt.Errorf("listing %s: %w", rel, err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, RedactionMetaSuffix) {
+			continue
+		}
+		out = append(out, rel+"/"+name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // sanitizeForPersistence is the store's single sanitization boundary: it
 // returns the bytes that are allowed to reach disk for this store, together
 // with the number of secret replacements sanitization performed.

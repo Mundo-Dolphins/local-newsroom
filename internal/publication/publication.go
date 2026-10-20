@@ -1424,6 +1424,14 @@ func (p *Plan) Validate() error {
 		if err := t.Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("targets[%d]: %w", i, err))
 		}
+		// Every receipt on a target — final, partial, or carried forward
+		// as resume state — must prove exactly this plan's artifact bytes:
+		// a receipt from different content is stale or transplanted and a
+		// document that carries one fails closed on load (it is never
+		// resumed from).
+		if t.Receipt != nil && !t.Receipt.ContentDigest.Matches(string(p.Artifact.Digest)) {
+			addf("target %q receipt digests %q but the plan's artifact is %q; a receipt must prove the approved content", t.ID, t.Receipt.ContentDigest, p.Artifact.Digest)
+		}
 	}
 	if err := validateTargetGraph(p.Targets); err != nil {
 		errs = append(errs, err)

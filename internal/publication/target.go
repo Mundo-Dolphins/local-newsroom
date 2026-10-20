@@ -396,8 +396,23 @@ func (t *PublicationTarget) Validate() error {
 			errs = append(errs, fmt.Errorf("target %q: invalid receipt: %w", t.ID, err))
 		}
 	}
-	if t.Receipt != nil && t.Status != StatusSucceeded && t.Status != StatusPartiallySucceeded {
-		addf("target %q is %s but carries a receipt; receipts belong to succeeded or partially succeeded targets", t.ID, t.Status)
+	// A receipt is external proof of an attempt, so a target that never
+	// attempted (planned) cannot legitimately carry one: a receipt there
+	// marks a corrupted or forged document.
+	//
+	// Deliberately, the receipt persists across the states that follow the
+	// attempt (publishing again on a resumed partial, failed again, or
+	// aborted mid-resume): for a partially posted thread, that receipt is
+	// the resume state the next cycle's publisher deduplicates against.
+	// Dropping it would lose the "already posted" proof and the next resume
+	// would repost those posts. A receipt that persists must still be a
+	// well-formed one.
+	if t.Receipt != nil && t.Status != StatusSucceeded {
+		if t.Status == StatusPlanned {
+			addf("target %q is %s but carries a receipt; only an attempted target may hold external proof", t.ID, t.Status)
+		} else if err := t.Receipt.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("target %q: invalid receipt: %w", t.ID, err))
+		}
 	}
 	if t.DryRun != nil {
 		if err := t.DryRun.Validate(); err != nil {

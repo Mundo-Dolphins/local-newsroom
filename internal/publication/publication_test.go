@@ -927,21 +927,56 @@ func TestPlanValidate(t *testing.T) {
 		mutate func(p *Plan)
 		substr string
 	}{
-		"nil":                           {nil, ""},
-		"no schema":                     {func(p *Plan) { p.SchemaVersion = "" }, "schema_version"},
-		"bad schema format":             {func(p *Plan) { p.SchemaVersion = "garbage" }, "semantic version"},
-		"unsupported major":             {func(p *Plan) { p.SchemaVersion = "9.9.9" }, "unsupported"},
-		"zero id":                       {func(p *Plan) { p.ID = "" }, "publication id"},
-		"zero run id":                   {func(p *Plan) { p.RunID = "" }, "run_id"},
-		"missing workspace is fine":     {func(p *Plan) { p.Workspace = "" }, ""},
-		"bad workspace":                 {func(p *Plan) { p.Workspace = "Bad Workspace" }, "workspace"},
-		"bad status":                    {func(p *Plan) { p.Status = PublicationStatus("maybe") }, "invalid plan status"},
-		"zero artifact":                 {func(p *Plan) { p.Artifact = ArtifactIdentity{} }, "artifact"},
-		"zero gate":                     {func(p *Plan) { p.Gate = GateEvidence{} }, "gate"},
-		"gate digest mismatch":          {func(p *Plan) { p.Gate.ArtifactDigest = Digest(digestOf(briefB)) }, "does not match"},
-		"no targets":                    {func(p *Plan) { p.Targets = nil }, "at least one"},
-		"duplicate targets":             {func(p *Plan) { p.Targets = append(p.Targets, p.Targets[0]) }, "duplicate"},
-		"dependency cycle":              {func(p *Plan) { p.Targets[0].DependsOn = []TargetID{"secondary"} }, "cycle"},
+		"nil":                       {nil, ""},
+		"no schema":                 {func(p *Plan) { p.SchemaVersion = "" }, "schema_version"},
+		"bad schema format":         {func(p *Plan) { p.SchemaVersion = "garbage" }, "semantic version"},
+		"unsupported major":         {func(p *Plan) { p.SchemaVersion = "9.9.9" }, "unsupported"},
+		"zero id":                   {func(p *Plan) { p.ID = "" }, "publication id"},
+		"zero run id":               {func(p *Plan) { p.RunID = "" }, "run_id"},
+		"missing workspace is fine": {func(p *Plan) { p.Workspace = "" }, ""},
+		"bad workspace":             {func(p *Plan) { p.Workspace = "Bad Workspace" }, "workspace"},
+		"bad status":                {func(p *Plan) { p.Status = PublicationStatus("maybe") }, "invalid plan status"},
+		"zero artifact":             {func(p *Plan) { p.Artifact = ArtifactIdentity{} }, "artifact"},
+		"zero gate":                 {func(p *Plan) { p.Gate = GateEvidence{} }, "gate"},
+		"gate digest mismatch":      {func(p *Plan) { p.Gate.ArtifactDigest = Digest(digestOf(briefB)) }, "does not match"},
+		"no targets":                {func(p *Plan) { p.Targets = nil }, "at least one"},
+		"duplicate targets":         {func(p *Plan) { p.Targets = append(p.Targets, p.Targets[0]) }, "duplicate"},
+		"dependency cycle":          {func(p *Plan) { p.Targets[0].DependsOn = []TargetID{"secondary"} }, "cycle"},
+		"transplanted receipt": {func(p *Plan) {
+			at := tAt(30)
+			a := NewAttempt(1, at)
+			a.Status = AttemptStatusSucceeded
+			ts := run.NewTimestamp(at)
+			a.FinishedAt = &ts
+			a.Receipt = NewReceipt(p.ID, "main", "bluesky",
+				"https://bsky.app/profile/dolphins.example/post/1", "3luchk2f5zrq4c5n3b2v7xjy6h8d9m0a1k4e6t7u8i9o0p1q2r3s",
+				Digest(digestOf(briefB)), "idem-7f3a", "bluesky-publisher/0.6.0", nil, at)
+			tgt := &p.Targets[0]
+			tgt.Status = StatusSucceeded
+			tgt.Receipt = a.Receipt
+			tgt.Attempts = []PublicationAttempt{a}
+		}, "must prove the approved content"},
+		"failed target keeps its matching resume receipt": {func(p *Plan) {
+			at := tAt(30)
+			a := NewAttempt(1, at)
+			a.Status = AttemptStatusFailed
+			ts := run.NewTimestamp(at)
+			a.FinishedAt = &ts
+			e := errSum("net", "unreachable", at)
+			a.Error = e
+			a.Receipt = receiptFor(p, "main", at)
+			tgt := &p.Targets[0]
+			tgt.Status = StatusFailed
+			tgt.Error = e
+			tgt.Receipt = a.Receipt
+			tgt.Attempts = []PublicationAttempt{a}
+			sec := &p.Targets[1]
+			sec.Status = StatusSkipped
+			sec.SkipReason = "not needed"
+			p.Status = StatusFailed
+			p.FinishedAt = &ts
+			p.TerminalReason = "one target failed"
+		}, ""},
 		"approved without approval":     {func(p *Plan) { p.Approvals = nil }, "no effective approval"},
 		"stale approval counts as none": {func(p *Plan) { p.Approvals[0].Status = ApprovalStatusStale }, "no effective approval"},
 		"secret in terminal reason":     {func(p *Plan) { p.TerminalReason = testToken }, "secret-looking"},

@@ -1,4 +1,4 @@
-// Package run defines the v0.5 persistence model for newsroom runs.
+// Package run defines the v0.5/v0.6 persistence model for newsroom runs.
 //
 // A Manifest is a machine-readable, versioned record of one editorial job:
 // from its topic and effective configuration, through every stage attempt,
@@ -45,7 +45,13 @@ import (
 // The version is semantic (MAJOR.MINOR.PATCH). Consumers must reject
 // manifests whose MAJOR version they do not understand; MINOR/PATCH changes
 // are backward compatible.
-const SchemaVersion = "0.5.0"
+//
+// Schema lineage: 0.5.0 introduced the manifest. 0.6.0 adds the optional
+// publication_state summary field (v0.6 controlled publication) and changes
+// nothing else: manifests written by 0.5.0 load unchanged (the field is
+// absent, i.e. "no publication state yet"), and every 0.5.0 rule still
+// applies.
+const SchemaVersion = "0.6.0"
 
 // SchemaMajorCurrent is the schema major version understood by this package.
 const SchemaMajorCurrent = 0
@@ -318,6 +324,105 @@ func (p Publication) Validate() error {
 	}
 	if p.Hash != "" && !publicationHashRe.MatchString(p.Hash) {
 		return fmt.Errorf("publication hash %q is invalid: use lowercase hex (8-128 chars)", p.Hash)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// PublicationState
+// ---------------------------------------------------------------------------
+
+// PublicationState is the manifest's summary of the run's publication state
+// (v0.6, schema 0.6.0): a reference to the run's latest persisted
+// publication plan plus a small status roll-up.
+//
+// The full plan — its targets, approval, gate evidence, attempts, and
+// receipts — is a separate versioned document in the run directory
+// (publication/plans/<plan-id>.json, schema 0.6.0 of internal/publication);
+// this summary never embeds it. The manifest records only where the latest
+// plan lives, its persisted-bytes digest (tamper detection), and the status
+// counts a dashboard needs without loading the plan.
+//
+// The field is nil for every run without publication state: all manifests
+// written before v0.6 (schema 0.5.0) load with a nil PublicationState, and a
+// v0.6 run keeps it nil until a plan is first persisted.
+type PublicationState struct {
+	// PlanID is the ID of the latest publication plan
+	// ("pub-<timestamp>-<12 hex chars>").
+	PlanID string `json:"plan_id"`
+
+	// PlanPath is the run-relative path of the plan document
+	// (publication/plans/<plan-id>.json).
+	PlanPath string `json:"plan_path"`
+
+	// PlanHash is the digest of the persisted plan document bytes, in the
+	// canonical "sha256:<64 hex>" form.
+	PlanHash string `json:"plan_hash"`
+
+	// Status is the plan status, using the v0.6 publication vocabulary
+	// (mirrored constants; see publication_status.go).
+	Status string `json:"status"`
+
+	// Targets is the plan's target count.
+	Targets int `json:"targets"`
+
+	// Succeeded counts targets with status "succeeded".
+	Succeeded int `json:"succeeded"`
+
+	// Failed counts targets with status "failed".
+	Failed int `json:"failed"`
+
+	// UpdatedAt is the plan's last state transition time (UTC).
+	UpdatedAt Timestamp `json:"updated_at"`
+}
+
+// publicationPlanIDRe validates a publication plan ID in the manifest summary:
+// the "pub-" prefix plus the conservative ID body.
+var publicationPlanIDRe = regexp.MustCompile(`^pub-[a-zA-Z0-9._-]{1,128}$`)
+
+// Validate checks the publication state summary.
+func (p *PublicationState) Validate() error {
+	if p.PlanID == "" || !publicationPlanIDRe.MatchString(p.PlanID) {
+		return fmt.Errorf("publication_state.plan_id %q is required and must be a 'pub-' plan ID", p.PlanID)
+	}
+	if p.PlanPath == "" || containsTraversal(p.PlanPath) {
+		return fmt.Errorf("publication_state.plan_path %q must be a run-relative path without '..' segments", p.PlanPath)
+	}
+	if !strings.HasPrefix(p.PlanPath, PublicationPlansDir+"/") {
+		return fmt.Errorf("publication_state.plan_path %q must live in %s/", p.PlanPath, PublicationPlansDir)
+	}
+	if !sha256DigestRe.MatchString(p.PlanHash) {
+		return fmt.Errorf("publication_state.plan_hash %q must be a 'sha256:<64 hex>' digest", p.PlanHash)
+	}
+	if !ValidPublicationStatus(p.Status) {
+		return fmt.Errorf("publication_state.status %q is not a known publication status", p.Status)
+	}
+	if p.Targets < 0 || p.Succeeded < 0 || p.Failed < 0 {
+		return fmt.Errorf("publication_state counts must not be negative")
+	}
+	if p.Succeeded > p.Targets || p.Failed > p.Targets {
+		return fmt.Errorf("publication_state counts exceed the target count")
+	}
+	// Terminal statuses carry count invariants of the plan state machine
+	// (RefreshStatus): a summary that breaks them is corrupt and fails
+	// closed. In-flight statuses (planned/approved/publishing) and
+	// cancelled plans impose no further rule.
+	switch p.Status {
+	case PublicationStatusSucceeded:
+		if p.Succeeded != p.Targets || p.Failed != 0 {
+			return fmt.Errorf("publication_state is succeeded but %d/%d targets succeeded and %d failed", p.Succeeded, p.Targets, p.Failed)
+		}
+	case PublicationStatusFailed:
+		if p.Succeeded == p.Targets {
+			return fmt.Errorf("publication_state is failed but every target succeeded")
+		}
+	case PublicationStatusSkipped:
+		if p.Succeeded != 0 || p.Failed != 0 {
+			return fmt.Errorf("publication_state is skipped but %d succeeded and %d failed", p.Succeeded, p.Failed)
+		}
+	}
+	if p.UpdatedAt.IsZero() {
+		return fmt.Errorf("publication_state.updated_at is required")
 	}
 	return nil
 }
@@ -826,6 +931,10 @@ type Manifest struct {
 	// Publication is the selected publication preset, when one was selected.
 	Publication *Publication `json:"publication,omitempty"`
 
+	// PublicationState summarizes the run's latest persisted publication
+	// plan (v0.6). Nil when the run has no publication state yet.
+	PublicationState *PublicationState `json:"publication_state,omitempty"`
+
 	// Model records the LLM model and endpoint used by the run.
 	// Credentials are never recorded (see ModelMetadata).
 	Model ModelMetadata `json:"model"`
@@ -1076,6 +1185,11 @@ func (m *Manifest) Validate() error {
 	}
 	if m.Publication != nil {
 		if err := m.Publication.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if m.PublicationState != nil {
+		if err := m.PublicationState.Validate(); err != nil {
 			errs = append(errs, err)
 		}
 	}

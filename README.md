@@ -196,6 +196,17 @@ and byte validation before any write, deterministic link facets with byte
 offsets, strong-ref reply chaining, resumable partial failures, dry-run with
 zero network, and a digest-bound receipt naming the post AT URIs.
 
+The glue that makes all of this safe across crashes is the publication
+persistence layer in `internal/publish`
+([docs/contracts-v0.6.md §20](docs/contracts-v0.6.md#20-persistence-and-idempotent-resumetry)):
+the plan document is persisted under the run's `publication/` tree through
+the workspace sanitization boundary, the run manifest gains a small
+`publication_state` summary (manifest schema 0.6.0; v0.5 manifests load
+unchanged), and the publish engine resumes a crashed or partially failed
+cycle idempotently — a target that holds a receipt is never re-executed, a
+dangling in-flight target is aborted rather than blindly retried, and a
+changed artifact invalidates its approval by digest.
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates
