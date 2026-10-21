@@ -135,7 +135,7 @@ func resetAllCLIFlags(t *testing.T) {
 	t.Helper()
 	resetFlags(t, rootCmd, researchCmd, verifyCmd, writeCmd, finalCheckCmd,
 		archiveCmd, addCmd, searchCmd, statsCmd, configCmd, configShowCmd, configValidateCmd, helpCmd,
-		runCmd, tuiCmd, reviewCmd)
+		runCmd, tuiCmd, reviewCmd, publishCmd)
 
 	// pflag slice flags (e.g. --url) accumulate values on repeated Set() calls
 	// once a flag has been changed, so DefValue resets do not clear them.
@@ -152,6 +152,18 @@ func resetAllCLIFlags(t *testing.T) {
 	if f := runCmd.Flags().Lookup("url"); f != nil {
 		f.Changed = false
 	}
+	publishFlags.targets = nil
+	if f := publishCmd.Flags().Lookup("target"); f != nil {
+		f.Changed = false
+	}
+	publishFlags.digests = nil
+	if f := publishCmd.Flags().Lookup("digest"); f != nil {
+		f.Changed = false
+	}
+	// The non-flag injection seams (publisherFactory, publishPrompt,
+	// publishTTY) are deliberately NOT reset here: they are configured per
+	// publish test with t.Cleanup restoration, and runCommand calls this
+	// reset before every Execute.
 }
 
 // runCommand drives the CLI exactly the way main() does: full command path
