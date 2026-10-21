@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -66,7 +67,14 @@ var versionFlag bool
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// exitError carries a specific exit code (publish; v0.5 commands
+		// return plain errors and keep their historical code 1).
+		var ee *exitError
+		code := 1
+		if errors.As(err, &ee) {
+			code = ee.code
+		}
 		fmt.Fprintf(os.Stderr, "%s: %s\n", rootCmd.CommandPath(), err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
