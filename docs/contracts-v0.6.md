@@ -23,6 +23,7 @@ Related documents:
 - [`contracts-v0.5.md`](contracts-v0.5.md) — the run manifest this contract layers on top of
 - [`contracts-v0.4.md`](contracts-v0.4.md) — per-stage data contracts
 - [`review-bundle-v0.5.md`](review-bundle-v0.5.md) — the READY review state the publication gate requires
+- [`tui-v0.6.md`](tui-v0.6.md) — the TUI publication screen (the `method: tui` approval surface)
 
 ---
 

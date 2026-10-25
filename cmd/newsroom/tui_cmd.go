@@ -43,6 +43,9 @@ var tuiCmd = &cobra.Command{
   • watch stage progress of the running run
   • resume failed or interrupted runs, retry a stage, cancel with
     confirmation, and open rendered artifacts in $EDITOR
+  • publish a completed run: review its publication plans (exact
+    destinations, dry-run rehearsals) and approve explicitly before
+    anything is published (v0.6)
 
 The TUI runs locally and uses the configured remote endpoints (oMLX for the
 LLM, SearXNG for search) exactly as the ` + "`run`" + ` command does; it starts
@@ -84,11 +87,16 @@ type tuiApp struct {
 	overrides     map[string]config.Override
 	store         *workspace.Store
 
-	mu        sync.Mutex
-	runCtx    context.Context
-	cancelRun context.CancelFunc
-	runDone   chan struct{} // closed when the current cycle reaches its terminal state
-	runningID string
+	mu           sync.Mutex
+	runCtx       context.Context
+	cancelRun    context.CancelFunc
+	runDone      chan struct{} // closed when the current run cycle reaches its terminal state
+	runningID    string
+	pubCtx       context.Context
+	cancelPub    context.CancelFunc
+	pubDone      chan struct{} // closed when the publication cycle reaches its terminal state
+	pubRunningID string
+	pubErr       string // why the last publication cycle stopped (redacted) — "" when it completed cleanly
 }
 
 // newTuiApp resolves the configuration and opens the workspace store.
@@ -452,13 +460,14 @@ func doTui(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(&teaAdapter{m: tui.New(app)}, tea.WithAltScreen(), tea.WithContext(cmd.Context()))
+	program := tea.NewProgram(&teaAdapter{m: tui.NewWithPublication(app, app)}, tea.WithAltScreen(), tea.WithContext(cmd.Context()))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}
 	// Stop any in-flight run and give the runner a bounded grace period to
 	// persist the final (cancelled) state before the process exits.
 	app.waitInFlight()
+	app.waitInFlightPublication()
 	return nil
 }
 
@@ -558,6 +567,16 @@ func (a *tuiApp) manifestToDetail(m *run.Manifest) (tui.RunDetail, error) {
 		d.QualityScore = s.QualityScore
 		d.FinalCheck = s.FinalCheck
 		d.Findings = s.Findings
+	}
+
+	// Publication (v0.6): the manifest's summary of the run's publication
+	// state (one line in the detail view; the full state has its own
+	// screen, opened with p).
+	if ps := m.PublicationState; ps != nil {
+		d.PublicationStatus = ps.Status
+		d.PublicationTargets = ps.Targets
+		d.PublicationSucceeded = ps.Succeeded
+		d.PublicationFailed = ps.Failed
 	}
 	return d, nil
 }
