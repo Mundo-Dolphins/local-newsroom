@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,7 +58,11 @@ func (m Model) View() string {
 		body -= len(wrapWidth(m.renderHelp(), m.width))
 	}
 	if m.confirm != nil {
-		body -= 5
+		if m.confirm.detail == "" {
+			body -= 5
+		} else {
+			body -= 3 + len(wrapWidth(m.confirm.detail, 42))
+		}
 	}
 	if body < 3 {
 		body = 3
@@ -92,6 +97,8 @@ func (m Model) renderBody(height int) string {
 		return m.renderNew(height)
 	case screenRun:
 		return m.renderRun(height)
+	case screenPublish:
+		return m.renderPublish(height)
 	default:
 		return m.renderList(height)
 	}
@@ -293,7 +300,348 @@ func (m Model) renderRun(height int) string {
 	return clipLines(strings.Split(strings.TrimRight(b.String(), "\n"), "\n"), m.width, height)
 }
 
-// renderStageLine renders one stage row.
+// renderPublish renders the controlled-publication review screen (v0.6,
+// #122): the gate verdict, the preset, and one block per destination plan
+// with its rehearsal, approval, receipts, and remediation.
+func (m Model) renderPublish(height int) string {
+	var b strings.Builder
+
+	head := stTitle.Render(truncate(m.pubRun, max(10, m.width/2)))
+	if st := m.pubState; st != nil && st.RunStatus != "" {
+		head += " " + statusStyle(st.RunStatus).Render("["+st.RunStatus+"]")
+	}
+	b.WriteString("publication — " + head + "\n")
+
+	if m.pubState == nil {
+		if m.pubErr != "" {
+			b.WriteString("  " + stErr.Render(truncate(m.pubErr, max(10, m.width-4))) + "\n")
+		} else {
+			b.WriteString("  " + spinnerFrames[m.frame%len(spinnerFrames)] + " " + stInfo.Render("loading the publication plan…") + "\n")
+		}
+		return clipLines(strings.Split(strings.TrimRight(b.String(), "\n"), "\n"), m.width, height)
+	}
+	st := m.pubState
+
+	// An intent that failed (a refused approval, a rejected resume) is
+	// always visible, even over the loaded state.
+	if m.pubErr != "" {
+		b.WriteString("  " + stErr.Render("⚠ "+truncate(m.pubErr, max(10, m.width-6))) + "\n")
+	}
+
+	// Gate verdict.
+	if st.Ready {
+		b.WriteString(stOk.Render("  ready for publication") + "\n")
+	} else {
+		b.WriteString(stErr.Render("  not ready for publication") + "\n")
+		if st.ReadyReason != "" {
+			for _, l := range wrapWidth("      "+st.ReadyReason, max(10, m.width-6)) {
+				b.WriteString(stDim.Render(l) + "\n")
+			}
+		}
+	}
+
+	// Preset.
+	if st.PresetName != "" {
+		line := stHead.Render("  preset ") + st.PresetName
+		if st.PresetHash != "" {
+			line += stDim.Render(" (" + shortDigest(st.PresetHash) + ")")
+		}
+		b.WriteString(line + "\n")
+	} else if st.NoPresetReason != "" {
+		b.WriteString(stWarn.Render("  preset: none — ") + stDim.Render(truncate(st.NoPresetReason, max(10, m.width-20))) + "\n")
+	}
+
+	// Final check.
+	if st.FinalCheck != "" {
+		line := stHead.Render("  final check ") + finalCheckStyle(st.FinalCheck).Render(st.FinalCheck)
+		if st.Findings > 0 {
+			line += stDim.Render(fmt.Sprintf(" (%d findings)", st.Findings))
+		}
+		b.WriteString(line + "\n")
+	}
+
+	// A cycle interrupted mid-flight is always surfaced.
+	if st.Interrupted {
+		b.WriteString(stWarn.Render("  ⚠ the last publication cycle was interrupted — the state is resumable (r)") + "\n")
+	}
+
+	// Plans.
+	if len(st.Plans) == 0 {
+		b.WriteString(stDim.Render("  no plans for this run yet — press a to approve and publish") + "\n")
+	} else {
+		b.WriteString("\n")
+		for i := range st.Plans {
+			b.WriteString(m.renderPlanBlock(i, &st.Plans[i], st) + "\n")
+		}
+	}
+
+	return clipLines(strings.Split(strings.TrimRight(b.String(), "\n"), "\n"), m.width, height)
+}
+
+// finalCheckStyle picks the style for a final-check verdict.
+func finalCheckStyle(status string) lipgloss.Style {
+	switch status {
+	case "pass":
+		return stOk
+	case "fail":
+		return stErr
+	case "review":
+		return stWarn
+	}
+	return stDim
+}
+
+// shortDigest abbreviates a digest for display.
+func shortDigest(d string) string {
+	if len(d) > 18 {
+		return d[:18] + "…"
+	}
+	return d
+}
+
+// renderPlanBlock renders one destination plan block (selected or not).
+func (m Model) renderPlanBlock(i int, p *PublicationPlan, st *PublicationState) string {
+	var b strings.Builder
+
+	label := p.Key
+	if label == "" {
+		label = p.Destination
+	}
+	if label == "" {
+		label = "plan"
+	}
+	head := stHead.Render(label)
+	if p.Destination != "" && p.Destination != label {
+		head += stDim.Render(" → " + truncate(p.Destination, max(10, m.width-24)))
+	}
+	if p.PlanID != "" {
+		head += " " + statusStyle(p.Status).Render("["+p.Status+"]")
+	} else {
+		head += " " + stDim.Render("[no plan]")
+	}
+	if i == m.pubSel {
+		b.WriteString("  " + stFocus.Render("▸ ") + head + "\n")
+	} else {
+		b.WriteString("    • " + head + "\n")
+	}
+
+	// Provenance + kind.
+	if p.Kind != "" {
+		b.WriteString(stDim.Render("      kind   "+p.Kind) + "\n")
+	}
+
+	// Facts (branch, path, post count, ...).
+	if facts := planFactsLine(p.Facts, m.width); facts != "" {
+		b.WriteString("      " + stDim.Render(facts) + "\n")
+	}
+
+	// Baseline content + digest.
+	if p.ArtifactPath != "" {
+		line := "      " + stHead.Render("content  ") + truncate(p.ArtifactPath, max(10, m.width-28))
+		if p.ArtifactSize > 0 {
+			line += stDim.Render("  " + humanSize(p.ArtifactSize))
+		}
+		if p.ArtifactVersion != "" {
+			line += stDim.Render("  " + p.ArtifactVersion)
+		}
+		if p.ContentStale {
+			line += stWarn.Render("  ⚠ changed since baseline")
+		}
+		if p.ContentUnavailable {
+			line += stErr.Render("  ⚠ baseline file missing")
+		}
+		b.WriteString(line + "\n")
+	}
+	if p.ArtifactDigest != "" {
+		b.WriteString("      " + stHead.Render("digest   ") + stDim.Render(shortDigest(p.ArtifactDigest)) + "\n")
+	}
+
+	// Targets: state, receipt, or failure.
+	for _, t := range p.Targets {
+		b.WriteString(m.renderPubTarget(t) + "\n")
+	}
+
+	// Rehearsal.
+	if t := m.previewLine(p); t != "" {
+		b.WriteString(t + "\n")
+	}
+
+	// Approval.
+	if p.ApprovalBy != "" {
+		line := "      " + stHead.Render("approval ")
+		style := finalCheckStyle(p.ApprovalStatus)
+		if p.ApprovalStatus == "" {
+			style = stDim
+		}
+		line += style.Render(truncate(p.ApprovalBy, max(8, m.width-34)))
+		if p.ApprovalMethod != "" {
+			line += stDim.Render(" (" + p.ApprovalMethod)
+			if p.ApprovalStatus != "" {
+				line += ", " + p.ApprovalStatus
+			}
+			line += ")"
+		}
+		if !p.ApprovalEffective {
+			line += stWarn.Render(" ⚠ does not cover the current content")
+		}
+		b.WriteString(line + "\n")
+	} else {
+		b.WriteString("      " + stHead.Render("approval ") + stDim.Render("none") + "\n")
+	}
+
+	// Terminal reason.
+	if p.Reason != "" {
+		for _, l := range wrapWidth("      reason  "+p.Reason, max(10, m.width-12)) {
+			b.WriteString(stDim.Render(l) + "\n")
+		}
+	}
+
+	// Plan-level diagnostics.
+	for _, w := range lastN(p.Warnings, 2) {
+		b.WriteString("      " + stWarn.Render(truncate("⚠ "+w, max(10, m.width-8))) + "\n")
+	}
+	for _, e := range lastN(p.Errors, 2) {
+		b.WriteString("      " + stErr.Render(truncate("✗ "+e, max(10, m.width-8))) + "\n")
+	}
+
+	// Remediation after a failed / interrupted cycle.
+	if len(p.Remediation) > 0 {
+		limit := 3
+		if m.verbose {
+			limit = len(p.Remediation)
+		}
+		if limit > len(p.Remediation) {
+			limit = len(p.Remediation)
+		}
+		if len(p.Remediation) > limit {
+			b.WriteString(stDim.Render(fmt.Sprintf("      fix   (%d steps)", len(p.Remediation))) + "\n")
+		} else {
+			b.WriteString(stHead.Render("      fix") + "\n")
+		}
+		for _, r := range p.Remediation[:limit] {
+			line := r.Action
+			if r.Detail != "" {
+				line += " — " + r.Detail
+			}
+			for _, l := range wrapWidth("        → "+line, max(10, m.width-12)) {
+				b.WriteString(stWarn.Render(l) + "\n")
+			}
+		}
+		if !m.verbose && len(p.Remediation) > limit {
+			b.WriteString(stDim.Render("        (v shows all)") + "\n")
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderPubTarget renders one plan target with its latest state.
+func (m Model) renderPubTarget(t PublicationTarget) string {
+	name := t.Name
+	if name == "" {
+		name = t.ID
+	}
+	line := "      " + stHead.Render(padRight(name, 10))
+	switch t.Status {
+	case "publishing":
+		line += stRun.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " in flight")
+	case "succeeded":
+		line += stOk.Render("✓ ")
+		if t.ReceiptURI != "" {
+			line += stOk.Render(truncate(t.ReceiptURI, max(8, m.width-28)))
+			if m.verbose && t.ReceiptRecordID != "" {
+				line += stDim.Render("  (" + t.ReceiptRecordID + ")")
+			}
+		} else {
+			line += stOk.Render("published")
+		}
+	case "failed":
+		line += stErr.Render("✗ ")
+		if t.Error != "" {
+			line += stErr.Render(truncate(t.Error, max(8, m.width-28)))
+		} else {
+			line += stErr.Render("failed")
+		}
+	case "skipped":
+		line += stDim.Render("· skipped")
+		if t.SkipReason != "" {
+			line += stDim.Render(" — " + truncate(t.SkipReason, max(8, m.width-34)))
+		}
+	case "cancelled":
+		line += stWarn.Render("↺ cancelled")
+	case "planned", "approved":
+		line += statusStyle(t.Status).Render(t.Status)
+	default:
+		line += stDim.Render(t.Status)
+	}
+	return line
+}
+
+// previewLine renders the plan's latest rehearsal ("" when none is
+// available; the verbose mode adds the publisher's metadata).
+func (m Model) previewLine(p *PublicationPlan) string {
+	if len(p.Targets) == 0 {
+		return ""
+	}
+	t := p.Targets[0]
+	if t.PreviewOK == nil {
+		return "      " + stHead.Render("preview  ") + stDim.Render("no rehearsal available")
+	}
+	line := "      " + stHead.Render("preview  ")
+	if *t.PreviewOK {
+		line += stOk.Render("ok")
+	} else {
+		line += stErr.Render("blocked")
+	}
+	if t.PreviewDetails != "" {
+		line += stDim.Render(" — " + truncate(t.PreviewDetails, max(8, m.width-28)))
+	}
+	out := line + "\n"
+	limit := 2
+	if m.verbose {
+		limit = len(t.PreviewIssues)
+	}
+	if limit > len(t.PreviewIssues) {
+		limit = len(t.PreviewIssues)
+	}
+	if len(t.PreviewIssues) > 0 {
+		for _, issue := range t.PreviewIssues[:limit] {
+			for _, l := range wrapWidth("            "+issue, max(10, m.width-14)) {
+				out += stWarn.Render(l) + "\n"
+			}
+		}
+		if !m.verbose && len(t.PreviewIssues) > limit {
+			out += stDim.Render("            (v shows all)") + "\n"
+		}
+	}
+	if m.verbose {
+		for k, v := range t.PreviewMetadata {
+			out += stDim.Render(fmt.Sprintf("            %s %s\n", k, v))
+		}
+	}
+	return strings.TrimRight(out, "\n")
+}
+
+// planFactsLine renders up to three destination facts, joined.
+func planFactsLine(facts map[string]string, width int) string {
+	if len(facts) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(facts))
+	for k := range facts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		if len(parts) == 3 {
+			parts = append(parts, fmt.Sprintf("+%d more", len(facts)-3))
+			break
+		}
+		parts = append(parts, k+" "+facts[k])
+	}
+	return truncate(strings.Join(parts, "   ·   "), max(10, width-12))
+}
 func (m Model) renderStageLine(i int, s StageInfo, now time.Time) string {
 	icon := "○"
 	st := statusStyle(s.Status)
@@ -355,6 +703,16 @@ func (m Model) renderSummary() string {
 		}
 		parts = append(parts, "final check "+p)
 	}
+	if d.PublicationStatus != "" {
+		p := "publication " + d.PublicationStatus
+		if d.PublicationTargets > 0 {
+			p = fmt.Sprintf("%s (%d/%d targets ok)", p, d.PublicationSucceeded, d.PublicationTargets)
+		}
+		if d.PublicationFailed > 0 {
+			p = fmt.Sprintf("%s, %d failed", p, d.PublicationFailed)
+		}
+		parts = append(parts, p)
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -394,7 +752,16 @@ func (m Model) renderKeyLine() string {
 		if m.executing {
 			hints = []string{"c cancel", "v verbose", "q quit"}
 		} else {
-			hints = []string{"j/k stage", "t retry stage", "r resume", "o open artifact", "v verbose", "q back"}
+			hints = []string{"j/k stage", "t retry stage", "r resume", "p publish", "o open artifact", "v verbose", "q back"}
+		}
+	case screenPublish:
+		switch m.pubPhase {
+		case pubRunning:
+			hints = []string{"c cancel", "q quit", "esc back"}
+		case pubConfirm:
+			hints = []string{"y confirm", "n/esc dismiss"}
+		default: // pubReview / pubDone
+			hints = []string{"a approve & publish", "r resume", "j/k plan", "q quit", "esc back"}
 		}
 	}
 	if len(hints) == 0 {
@@ -429,9 +796,19 @@ func (m Model) renderHelp() string {
 		"  c            cancel the running run (asks first)",
 		"  t            retry the selected stage (invalidates downstream)",
 		"  r            resume after a failure",
+		"  p            open the publication review (terminal runs)",
 		"  o            open an artifact in $EDITOR (cycles)",
 		"  v            toggle verbose (full warning/error text)",
 		"  q / esc      back to the run list",
+		"",
+		"Publication (v0.6)",
+		"  a            approve & publish the plans (asks first)",
+		"  r            resume a failed / interrupted cycle (asks first)",
+		"  c            cancel the in-flight cycle (asks first)",
+		"  j/k, ↑/↓     select a plan",
+		"  v            toggle verbose (full preview / receipt text)",
+		"  esc          back to the run view",
+		"  q / ctrl+c   quit the app (asks first while publishing)",
 	}
 	return strings.Join(lines, "\n")
 }
@@ -442,10 +819,17 @@ func (m Model) renderConfirm() string {
 	lines := []string{
 		"┌────────────────────────────────────────────────┐",
 		fmt.Sprintf("│  %s", truncate(c.prompt, 42)),
+	}
+	if c.detail != "" {
+		for _, l := range wrapWidth(c.detail, 42) {
+			lines = append(lines, fmt.Sprintf("│  %s", l))
+		}
+	}
+	lines = append(lines,
 		"│                                                │",
 		"│   [y]es        [n]o (esc)                      │",
 		"└────────────────────────────────────────────────┘",
-	}
+	)
 	return strings.Join(lines, "\n")
 }
 

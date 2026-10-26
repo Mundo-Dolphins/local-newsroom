@@ -45,15 +45,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
-	"github.com/Mundo-Dolphins/local-newsroom/internal/editorial"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/publication"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/publish"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/publish/presets"
@@ -133,12 +129,6 @@ var publishFlags struct {
 	publication   string
 }
 
-// publisherFactory builds the executable publishers for the preset's
-// destinations. Production: the real adapters (git publish, Bluesky API).
-// Tests substitute fakes, so the CLI is verified without a checkout or a
-// network.
-var publisherFactory presets.Factory = presets.DefaultFactory
-
 // publishPrompt is the input of the interactive approval prompt. It is a
 // variable (not a package global of a concrete type) so tests can drive
 // the prompt deterministically with a buffer.
@@ -191,42 +181,6 @@ func exitf(code int, format string, args ...any) error {
 	return &exitError{code: code, err: fmt.Errorf(format, args...)}
 }
 
-// planKind records where one plan in the report came from.
-type planKind int
-
-const (
-	// kindNew: created by this invocation.
-	kindNew planKind = iota
-	// kindReused: created by an earlier invocation for the same content
-	// (a re-preview must not churn plan IDs).
-	kindReused
-	// kindAlreadyPublished: the same content fully published before;
-	// the plan is shown as an idempotent no-op.
-	kindAlreadyPublished
-)
-
-func (k planKind) label() string {
-	switch k {
-	case kindReused:
-		return "reused from a previous preview"
-	case kindAlreadyPublished:
-		return "already published (idempotent no-op)"
-	default:
-		return "new plan"
-	}
-}
-
-// planView pairs one plan with its destination, its preview, and (after
-// the cycle) its summary, the unit every presentation path renders.
-type planView struct {
-	kind  planKind
-	plan  *publication.Plan
-	dest  *presets.Destination
-	pv    *publish.ApprovalSummary
-	pvErr error
-	sum   *publish.Summary
-}
-
 // ---------------------------------------------------------------------------
 // Command handler
 // ---------------------------------------------------------------------------
@@ -276,7 +230,7 @@ func doPublish(cmd *cobra.Command, args []string) error {
 	orch := publish.NewOrchestrator(eng, id, bundle)
 
 	// --- Publication preset ------------------------------------------------
-	preset, bundleRoot, err := resolvePublishPreset(m)
+	preset, bundleRoot, err := resolvePublicationPreset(m, publishFlags.publication, publishFlags.bundleRoot)
 	if err != nil {
 		emitJSON(m, false, "", nil, "publish", 2, nil, false, err.Error())
 		return exitf(2, "%v", err)
@@ -309,57 +263,6 @@ func doPublish(cmd *cobra.Command, args []string) error {
 	return doPublishNew(ctx, eng, orch, m, pub, ready, readyReason, id, bundle)
 }
 
-// resolvePublishPreset resolves the publication preset for a publish
-// invocation.
-//
-// Precedence: --publication flag, then the preset the run recorded (a run
-// started with a publication keeps its preset for the whole lifecycle),
-// then the configuration chain (editorial.publication + editorial.bundle_root).
-//
-// It returns (nil, "", nil) when no preset is selected: that is not an
-// error here (a run without a preset simply has nothing to publish, which
-// the caller reports as exit 4).
-func resolvePublishPreset(m *run.Manifest) (*editorial.Preset, string, error) {
-	name := strings.TrimSpace(publishFlags.publication)
-	if name == "" && m.Publication != nil {
-		name = m.Publication.ID
-	}
-	if name == "" {
-		if v, _, err := appConfig.GetString(config.SettingEditorialPublication, config.Override{}); err == nil {
-			name = v
-		}
-	}
-	if name == "" {
-		return nil, "", nil
-	}
-	root := strings.TrimSpace(publishFlags.bundleRoot)
-	if root == "" && m.Publication != nil {
-		root = m.Publication.BundlePath
-	}
-	if root == "" {
-		v, _, err := appConfig.GetString(config.SettingEditorialBundle, config.Override{})
-		if err == nil {
-			root = v
-		}
-	}
-	if root == "" {
-		return nil, "", fmt.Errorf("publication %q requires an editorial bundle root: pass --bundle-root or set editorial.bundle_root", name)
-	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolving the editorial bundle root: %v", err)
-	}
-	loader, err := editorial.NewLoader(editorial.Config{Root: abs})
-	if err != nil {
-		return nil, "", fmt.Errorf("loading the editorial bundle: %v", err)
-	}
-	preset, err := loader.LoadPreset(name)
-	if err != nil {
-		return nil, "", fmt.Errorf("publication preset %q: %v", name, err)
-	}
-	return preset, loader.Root(), nil
-}
-
 // resolvePublishPlan resolves the plan a publish invocation operates on:
 // the run's latest plan by default, or the one named with --plan.
 func resolvePublishPlan(eng *publish.Engine, id run.RunID) (*publication.Plan, error) {
@@ -375,38 +278,6 @@ func resolvePublishPlan(eng *publish.Engine, id run.RunID) (*publication.Plan, e
 		return nil, fmt.Errorf("run %s has no publication plan to resume: %v (run 'newsroom publish %s' to prepare one)", id, err, id)
 	}
 	return p, nil
-}
-
-// publishReadiness evaluates the pre-publication gate.
-//
-// With an existing plan it reads the plan's content file (the baseline the
-// plan was built from); for a new publication it evaluates the first
-// preparable destination's canonical content from memory; with no content
-// at all it reports the gate from the manifest alone (never ready).
-func publishReadiness(orch *publish.Orchestrator, m *run.Manifest, bundle *review.Bundle, pub *presets.Preset, existing *publication.Plan) (bool, string, error) {
-	if existing != nil {
-		rc, err := orch.Ready(context.Background(), publish.CreatePlanRequest{ArtifactPath: existing.Artifact.Path})
-		if err != nil {
-			return false, "", err
-		}
-		if rc.ContentMissing {
-			return false, "not ready: " + rc.Reason, nil
-		}
-		return rc.Ready, rc.Reason, nil
-	}
-	if pub != nil {
-		for _, d := range pub.Destinations {
-			if d.ContentErr != nil || d.Content == nil {
-				continue
-			}
-			gate := publish.BuildGateEvidence(m, bundle, d.Content, time.Now())
-			ready, reason := publish.GateReady(gate)
-			return ready, reason, nil
-		}
-	}
-	gate := publish.BuildGateEvidence(m, bundle, nil, time.Now())
-	ready, reason := publish.GateReady(gate)
-	return ready, reason, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -551,53 +422,6 @@ func targetsCoverPlan(targets []string, plan *publication.Plan, dest *presets.De
 // New-plan path (prepare per destination, preview, approve, publish)
 // ---------------------------------------------------------------------------
 
-// planForContent resolves the existing plans of the run for the
-// destination's canonical content (the same content path):
-//
-//   - kindAlreadyPublished when the newest plan for this exact digest
-//     succeeded — publishing these bytes again would duplicate the external
-//     effect, so the destination is reported as a no-op;
-//   - kindReused when the newest plan for this digest is still actionable
-//     (planned, approved, publishing, failed, or partially succeeded) — it
-//     is reused instead of churning a new plan ID;
-//   - (nil, kindNew) when the run holds no plan for this content.
-//
-// Plans on the same path with a different digest (stale: the content
-// changed after they were created) are never reused for the new bytes.
-func planForContent(eng *publish.Engine, id run.RunID, d *presets.Destination) (*publication.Plan, planKind, error) {
-	ids, err := eng.ListPlanIDs(id)
-	if err != nil {
-		return nil, kindNew, fmt.Errorf("listing existing plans for run %s: %w", id, err)
-	}
-	wantDigest := string(d.Digest)
-	var reuse, published *publication.Plan
-	for _, pid := range ids {
-		plan, err := eng.Plan(id, pid)
-		if err != nil {
-			continue // an unreadable plan document never blocks a new plan
-		}
-		if plan.Artifact.Path != d.ContentPath() {
-			continue
-		}
-		if !plan.Artifact.Digest.Matches(wantDigest) {
-			continue // stale content: not reusable for the current bytes
-		}
-		switch {
-		case plan.Status == publication.StatusSucceeded:
-			published = plan
-		case !plan.Status.Terminal() || plan.Status == publication.StatusFailed || plan.Status == publication.StatusPartiallySucceeded:
-			reuse = plan
-		}
-	}
-	switch {
-	case published != nil:
-		return published, kindAlreadyPublished, nil
-	case reuse != nil:
-		return reuse, kindReused, nil
-	}
-	return nil, kindNew, nil
-}
-
 // doPublishNew prepares one plan per selected destination, previews each
 // one, and — only with --approve — approves and publishes them in
 // canonical order (site before thread).
@@ -614,18 +438,11 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	}
 
 	// Destinations whose content could not be prepared for this run are
-	// reported. An explicitly selected broken destination is a hard error;
+	// reported: an explicitly selected broken destination is a hard error;
 	// an unselected one is a warning and is simply excluded.
-	var usable []*presets.Destination
-	for _, d := range selected {
-		if d.ContentErr != nil {
-			if targetExplicitlySelected(publishFlags.targets, d) {
-				return exitf(4, "target %s cannot be prepared for run %s: %v", d.Target.ID, id, d.ContentErr)
-			}
-			warnf("target %s is not available for run %s: %v (excluded)", d.Target.ID, id, d.ContentErr)
-			continue
-		}
-		usable = append(usable, d)
+	usable, err := selectUsableDestinations(pub, selected, publishFlags.targets, id, warnf)
+	if err != nil {
+		return exitf(4, "%v", err)
 	}
 	if len(usable) == 0 {
 		return exitf(4, "nothing to publish: no destination of preset %q can be prepared for run %s", pub.Name, id)
@@ -643,41 +460,12 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	// disk), then resolve one plan per destination: reuse the run's existing
 	// plan for the same content, report already-published content as a
 	// no-op, and create a new plan only where the content has no plan yet.
-	views := make([]planView, 0, len(usable))
-	for _, d := range usable {
-		if _, err := eng.SaveContent(id, d.ContentName, d.Content); err != nil {
-			return fmt.Errorf("persisting the canonical content for target %s: %w", d.Target.ID, err)
-		}
-		plan, kind, err := planForContent(eng, id, d)
-		if err != nil {
-			return exitf(1, "%v", err)
-		}
-		if kind == kindNew {
-			req := publish.CreatePlanRequest{
-				ArtifactPath: d.ContentPath(),
-				Targets:      []publish.TargetSpec{d.Target},
-			}
-			plan, err = eng.CreatePlan(ctx, id, req, bundle)
-			if err != nil {
-				return fmt.Errorf("preparing the plan for target %s: %w", d.Target.ID, err)
-			}
-		}
-		views = append(views, planView{kind: kind, plan: plan, dest: d})
-	}
-
-	// Preview each actionable plan (zero external side effects; the
-	// rehearsal is recorded on the plan for audit). An already-published
-	// plan is terminal: no rehearsal is re-run against it. Publisher-
-	// construction problems degrade the preview to a warning, they do not
-	// fail the invocation.
-	for i := range views {
-		if views[i].kind == kindAlreadyPublished {
-			continue
-		}
-		if _, err := bindPlanPublishers(orch, pub, views[i].dest, views[i].plan); err != nil {
-			warnf("publisher for plan %s: %v (preview may be incomplete)", views[i].plan.ID, err)
-		}
-		views[i].pv, views[i].pvErr = orch.Preview(ctx, views[i].plan.ID)
+	// The dry-run rehearsal is recorded on the plan for audit (zero
+	// external side effects; a rehearsal problem is a warning, not a
+	// failure).
+	views, err := preparePlanSet(ctx, eng, orch, id, bundle, pub, usable, true, true, warnf)
+	if err != nil {
+		return exitf(1, "%v", err)
 	}
 
 	printNewPreview(m, pub, ready, views)
@@ -711,47 +499,19 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	}
 
 	// --- Publish (canonical order; a failed destination stops the rest) ---
-	code := 0
-	for i := range views {
-		v := &views[i]
-		if v.kind == kindAlreadyPublished {
-			continue
-		}
-		if _, err := bindPlanPublishers(orch, pub, v.dest, v.plan); err != nil {
-			code = 2
-			printCycleResult(v.plan, v.dest, nil)
-			emitJSON(m, ready, readyReason, pub, "publish", code, views, false, err.Error())
-			return exitf(code, "plan %s cannot be published: %v", v.plan.ID, err)
-		}
-		v.sum, err = orch.Publish(ctx, v.plan.ID)
-		printCycleResult(v.plan, v.dest, v.sum)
-		if ctx.Err() != nil || (v.sum != nil && v.sum.Interrupted) {
-			code = 7
-			break
-		}
-		if err != nil {
-			code = publishErrorExitCode(err, v.sum)
-			break // stop: never publish ahead of a failed destination
-		}
-		if v.sum != nil && (v.sum.Status == publication.StatusFailed || v.sum.Status == publication.StatusPartiallySucceeded) {
-			code = 6
-			break
-		}
-	}
-
+	code, cycleErr := runPublicationCycle(ctx, eng, orch, pub, id, views, func(v *planView, sum *publish.Summary, err error) {
+		printCycleResult(v.plan, v.dest, sum)
+	})
 	msg := ""
 	published := false
-	// The engine's persisted documents are the authoritative post-cycle
-	// state; refresh the report's plan copies before presenting.
-	for i := range views {
-		if p2, perr := eng.Plan(id, views[i].plan.ID); perr == nil {
-			views[i].plan = p2
-		}
+	last := (*publish.Summary)(nil)
+	if len(views) > 0 {
+		last = views[len(views)-1].sum
 	}
 	if code == 0 {
 		published = true
 	} else {
-		msg = cycleExitMessage(id, views[len(views)-1].sum, nil)
+		msg = cycleExitMessage(id, last, cycleErr)
 	}
 	emitJSON(m, ready, readyReason, pub, "publish", code, views, published, msg)
 	if code != 0 {
@@ -760,43 +520,9 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	return nil
 }
 
-// targetExplicitlySelected reports whether the destination was named by a
-// --target flag (as a key or a target ID).
-func targetExplicitlySelected(targets []string, d *presets.Destination) bool {
-	for _, t := range targets {
-		if t == d.Key || t == string(d.Target.ID) {
-			return true
-		}
-	}
-	return false
-}
-
 // ---------------------------------------------------------------------------
 // Shared cycle / approval helpers
 // ---------------------------------------------------------------------------
-
-// bindPlanPublishers builds the publishers for one plan's targets through
-// the preset's factory and binds them on the orchestrator. An error means
-// the plan cannot publish (no preset, or the adapter refused to
-// construct); callers printing previews degrade it to a warning instead.
-func bindPlanPublishers(orch *publish.Orchestrator, pub *presets.Preset, dest *presets.Destination, plan *publication.Plan) (map[publication.TargetID]publish.Publisher, error) {
-	if pub == nil || dest == nil {
-		return nil, errors.New("the publication preset is not available: without it the plan's publisher cannot be configured (select the preset with --publication/--bundle-root)")
-	}
-	if len(plan.Targets) == 0 {
-		return nil, fmt.Errorf("plan %s has no targets", plan.ID)
-	}
-	pubs, err := pub.Publishers(context.Background(), []*publication.Plan{plan})
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[publication.TargetID]publish.Publisher, len(plan.Targets))
-	for _, t := range plan.Targets {
-		m[t.ID] = pubs[0]
-	}
-	orch.SetPublishers(m)
-	return m, nil
-}
 
 // approvePlan obtains the explicit approval for one plan.
 //
@@ -805,7 +531,7 @@ func bindPlanPublishers(orch *publish.Orchestrator, pub *presets.Preset, dest *p
 // must be confirmed with --digest (paired positionally to the plan). The
 // mere presence of a terminal or stdin never implies approval.
 func approvePlan(ctx context.Context, orch *publish.Orchestrator, plan *publication.Plan, dest *presets.Destination, index int) error {
-	approver, err := resolveApprover()
+	approver, err := resolveApprover(publishFlags.approver)
 	if err != nil {
 		return exitf(5, "%v", err)
 	}
@@ -857,48 +583,6 @@ func approvePlan(ctx context.Context, orch *publish.Orchestrator, plan *publicat
 	return nil
 }
 
-// planApproved reports whether the plan holds an effective approval for
-// every one of its targets: granted, bound to the plan's artifact digest,
-// and scoped to the target. It mirrors the engine's per-target authority
-// check (Approval.EffectiveFor) without re-reading the artifact bytes.
-func planApproved(plan *publication.Plan) bool {
-	if plan == nil || len(plan.Targets) == 0 {
-		return false
-	}
-	digest := string(plan.Artifact.Digest)
-	for _, t := range plan.Targets {
-		ok := false
-		for i := len(plan.Approvals) - 1; i >= 0; i-- {
-			if plan.Approvals[i].EffectiveFor(digest, t.ID) {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// resolveApprover returns the approving principal: --approver, else the
-// current OS user.
-func resolveApprover() (string, error) {
-	if a := strings.TrimSpace(publishFlags.approver); a != "" {
-		return a, nil
-	}
-	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
-		return strings.TrimSpace(u.Username), nil
-	}
-	if name := strings.TrimSpace(os.Getenv("USER")); name != "" {
-		return name, nil
-	}
-	if name := strings.TrimSpace(os.Getenv("LOGNAME")); name != "" {
-		return name, nil
-	}
-	return "", errors.New("no approver identity could be determined: pass --approver <id>")
-}
-
 // isInteractive reports whether stdin is a terminal — the condition under
 // which a prompt is offered. Presence alone never implies approval.
 func isInteractive() bool {
@@ -912,73 +596,6 @@ func digestApprovalHint() string {
 		return "(you will be prompted per plan)"
 	}
 	return "(non-interactive: --digest <artifact digest> is required)"
-}
-
-// cycleExitCode maps a publication cycle outcome to the documented exit
-// code.
-func cycleExitCode(ctx context.Context, sum *publish.Summary, err error) int {
-	if ctx.Err() != nil || (sum != nil && sum.Interrupted) {
-		return 7
-	}
-	if errors.Is(err, publish.ErrNotApproved) || errors.Is(err, publish.ErrStaleApproval) ||
-		errors.Is(err, publish.ErrArtifactChanged) || errors.Is(err, publish.ErrPlanCancelled) {
-		return 5
-	}
-	if errors.Is(err, publish.ErrPublisherNotBound) || errors.Is(err, publish.ErrPlanInvalid) ||
-		errors.Is(err, publish.ErrArtifactMissing) || errors.Is(err, publish.ErrGateFailed) {
-		return 2
-	}
-	if sum != nil {
-		switch sum.Status {
-		case publication.StatusSucceeded, publication.StatusSkipped:
-			return 0
-		case publication.StatusFailed, publication.StatusPartiallySucceeded:
-			return 6
-		case publication.StatusPublishing:
-			return 7
-		}
-	}
-	if err != nil {
-		return 1
-	}
-	return 0
-}
-
-// publishErrorExitCode maps a publish error to an exit code, defaulting an
-// in-cycle failure to 6 (partial: resume it).
-func publishErrorExitCode(err error, sum *publish.Summary) int {
-	if errors.Is(err, publish.ErrNotApproved) || errors.Is(err, publish.ErrStaleApproval) ||
-		errors.Is(err, publish.ErrArtifactChanged) || errors.Is(err, publish.ErrPlanCancelled) {
-		return 5
-	}
-	if errors.Is(err, publish.ErrPublisherNotBound) || errors.Is(err, publish.ErrPlanInvalid) ||
-		errors.Is(err, publish.ErrArtifactMissing) || errors.Is(err, publish.ErrGateFailed) {
-		return 2
-	}
-	if errors.Is(err, publish.ErrInterrupted) {
-		return 7
-	}
-	if sum != nil && (sum.Status == publication.StatusFailed || sum.Status == publication.StatusPartiallySucceeded) {
-		return 6
-	}
-	return 6
-}
-
-// cycleExitMessage summarizes a non-zero cycle outcome for the error line.
-func cycleExitMessage(id run.RunID, sum *publish.Summary, err error) string {
-	status := ""
-	if sum != nil {
-		status = string(sum.Status)
-	}
-	switch {
-	case sum != nil && sum.Interrupted:
-		return "publication was interrupted: resume with 'newsroom publish " + string(id) + " --resume'"
-	case status == "failed" || status == "partially_succeeded":
-		return "publication is incomplete (a target failed): resume with 'newsroom publish " + string(id) + " --resume' (already-published targets keep their receipts and are not re-published)"
-	case err != nil:
-		return err.Error()
-	}
-	return "publication failed"
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,18 +686,6 @@ func dedupeStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-func destinationForPlan(pub *presets.Preset, plan *publication.Plan) *presets.Destination {
-	if pub == nil || len(plan.Targets) == 0 {
-		return nil
-	}
-	for _, d := range pub.Destinations {
-		if string(d.Target.ID) == string(plan.Targets[0].ID) {
-			return d
-		}
-	}
-	return nil
 }
 
 // printRunHeader prints the run identity block every report leads with.

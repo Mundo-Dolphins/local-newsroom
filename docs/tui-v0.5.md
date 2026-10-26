@@ -36,6 +36,8 @@ Related documents:
   stages
 - [`review-bundle-v0.5.md`](review-bundle-v0.5.md) — the `review.md` every
   finished run gets (the TUI attaches it when a cycle completes)
+- [`tui-v0.6.md`](tui-v0.6.md) — the v0.6 publication review screen built on
+  top of this interface
 
 ---
 

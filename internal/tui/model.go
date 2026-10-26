@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +18,7 @@ const (
 	screenList screen = iota
 	screenNew
 	screenRun
+	screenPublish // the controlled-publication review screen (v0.6)
 )
 
 // confirmKind classifies a pending confirmation.
@@ -25,13 +27,36 @@ type confirmKind int
 const (
 	confirmQuitRunning confirmKind = iota
 	confirmCancel
+	// v0.6 publication confirmations (screenPublish).
+	confirmApprovePub // approve & publish the actionable plans
+	confirmResumePub  // resume a failed / interrupted cycle
+	confirmCancelPub  // cancel the in-flight publication cycle
+	confirmPubBack    // cancel the cycle and go back to the run view
+	confirmQuitPub    // cancel the cycle and quit the app
 )
 
 // confirm is a modal yes/no prompt layered over the current screen.
 type confirm struct {
 	kind   confirmKind
 	prompt string
+	detail string // optional second line ("" for a single-line prompt)
 }
+
+// pubPhase is the phase of the publication screen (screenPublish).
+type pubPhase int
+
+const (
+	// pubReview shows the plans, previews, and publication state; the
+	// approve (a) and resume (r) surface.
+	pubReview pubPhase = iota
+	// pubConfirm shows the explicit confirmation modal; a cycle starts
+	// only from here on a deliberate y.
+	pubConfirm
+	// pubRunning: a publication cycle is in flight (live polling).
+	pubRunning
+	// pubDone: the cycle ended; receipts and remediation are shown.
+	pubDone
+)
 
 // wizard is the "new run" form state.
 type wizard struct {
@@ -182,6 +207,19 @@ type (
 	runFinishedMsg struct{ id string }
 	refreshMsg     struct{ at time.Time } // progress poll
 	animMsg        struct{ at time.Time } // spinner animation
+
+	// v0.6 publication messages (screenPublish).
+	pubLoadedMsg struct {
+		runID string
+		state *PublicationState
+		err   error
+	}
+	pubStartedMsg struct {
+		runID string
+		err   error
+	}
+	pubFinishedMsg struct{}
+	pubRefreshMsg  struct{ at time.Time } // live poll tick while a cycle runs
 )
 
 // Model is the TUI state machine.
@@ -217,6 +255,14 @@ type Model struct {
 	frame     int
 	executing bool // a run/resume/retry cycle is active for activeID
 
+	// Publication state (screenPublish).
+	pubSvc   PublicationService // nil: publication is not available
+	pubRun   string             // the run under publication review
+	pubState *PublicationState  // latest projection (nil while loading)
+	pubSel   int                // selected plan index
+	pubPhase pubPhase
+	pubErr   string // last projection/approval error ("" when none)
+
 	// confirm is a modal prompt layered over the current screen.
 	confirm *confirm
 }
@@ -245,6 +291,7 @@ func (execOpener) Open(path string) tea.Cmd {
 }
 
 // New creates a Model bound to the given service.
+// New creates a Model bound to the given service.
 func New(svc Service) Model {
 	return Model{
 		svc:    svc,
@@ -253,6 +300,15 @@ func New(svc Service) Model {
 		height: 24,
 		screen: screenList,
 	}
+}
+
+// NewWithPublication creates a Model bound to the service plus the
+// controlled-publication surface (v0.6). pub is nil when the application
+// does not offer publication (the run view then offers no entry point).
+func NewWithPublication(svc Service, pub PublicationService) Model {
+	m := New(svc)
+	m.pubSvc = pub
+	return m
 }
 
 // Init implements tea.Model.
@@ -301,6 +357,52 @@ func (m Model) finishRun(id string) tea.Cmd {
 			return runFinishedMsg{id: id}
 		case <-time.After(3 * time.Second):
 			return runFinishedMsg{id: id}
+		}
+	}
+}
+
+// loadPublicationState returns the command that projects the publication
+// picture of runID (read-only: it may prepare plans and previews, never
+// publish).
+func (m Model) loadPublicationState(runID string, opts PublicationOptions) tea.Cmd {
+	return func() tea.Msg {
+		state, err := m.pubSvc.PublicationState(context.Background(), runID, opts)
+		return pubLoadedMsg{runID: runID, state: state, err: err}
+	}
+}
+
+// approvePubCmd returns the command that performs the explicit approval &
+// publish intent (the synchronous part; the cycle runs asynchronously).
+func (m Model) approvePubCmd(runID string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.pubSvc.ApprovePublication(context.Background(), runID)
+		return pubStartedMsg{runID: runID, err: err}
+	}
+}
+
+// resumePubCmd returns the command that performs the explicit resume
+// intent.
+func (m Model) resumePubCmd(runID string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.pubSvc.ResumePublication(context.Background(), runID)
+		return pubStartedMsg{runID: runID, err: err}
+	}
+}
+
+// watchPubDone returns the command that watches the in-flight publication
+// cycle (mirrors finishRun, with a long safety timeout for a cycle that
+// never signals).
+func (m Model) watchPubDone() tea.Cmd {
+	done := m.pubSvc.PublicationDone()
+	return func() tea.Msg {
+		if done == nil {
+			return pubFinishedMsg{}
+		}
+		select {
+		case <-done:
+			return pubFinishedMsg{}
+		case <-time.After(10 * time.Minute):
+			return pubFinishedMsg{}
 		}
 	}
 }
@@ -368,12 +470,61 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.executing = false
 		return m, m.refreshDetail(msg.id)
 
+	case pubLoadedMsg:
+		if msg.runID != m.pubRun || m.screen != screenPublish {
+			return m, nil // stale projection (the screen was left in the meantime)
+		}
+		m.pubErr = ""
+		if msg.err != nil {
+			m.pubErr = msg.err.Error()
+			return m, m.maybePollPub()
+		}
+		m.pubState = msg.state
+		m.clampPubSelection()
+		if m.pubPhase == pubRunning && m.pubSvc.PublicationInFlight() == "" {
+			m.pubPhase = pubDone
+			m.status = "publication cycle finished"
+		}
+		return m, m.maybePollPub()
+
+	case pubStartedMsg:
+		if msg.runID != m.pubRun || m.screen != screenPublish {
+			return m, nil
+		}
+		m.confirm = nil
+		if msg.err != nil {
+			// The synchronous part failed before any cycle: back to review.
+			m.pubPhase = pubReview
+			m.pubErr = msg.err.Error()
+			return m, m.loadPublicationState(m.pubRun, PublicationOptions{Preview: true})
+		}
+		m.pubPhase = pubRunning
+		m.status = "publishing…"
+		return m, tea.Batch(m.loadPublicationState(m.pubRun, PublicationOptions{}), m.maybePollPub(), m.watchPubDone())
+
+	case pubFinishedMsg:
+		if m.pubRun == "" || m.screen != screenPublish {
+			return m, nil
+		}
+		m.pubPhase = pubDone
+		m.status = "publication cycle finished"
+		return m, m.loadPublicationState(m.pubRun, PublicationOptions{})
+
+	case pubRefreshMsg:
+		if m.screen != screenPublish || m.pubPhase != pubRunning {
+			return m, nil
+		}
+		return m, tea.Batch(m.loadPublicationState(m.pubRun, PublicationOptions{}), m.maybePollPub())
+
 	case refreshMsg:
 		return m, m.maybePoll()
 
 	case animMsg:
 		m.frame++
-		if m.screen == screenRun {
+		switch {
+		case m.screen == screenRun:
+			return m, m.animate()
+		case m.screen == screenPublish && (m.pubState == nil || m.pubPhase == pubRunning):
 			return m, m.animate()
 		}
 		return m, nil
@@ -408,6 +559,19 @@ func (m Model) animate() tea.Cmd {
 	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg { return animMsg{at: t} })
 }
 
+// maybePollPub schedules the live refresh and spinner while the publication
+// screen needs them: while the initial projection is still loading, or while
+// a publication cycle is in flight.
+func (m Model) maybePollPub() tea.Cmd {
+	if m.screen != screenPublish {
+		return nil
+	}
+	if m.pubState == nil || m.pubPhase == pubRunning {
+		return tea.Batch(tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return pubRefreshMsg{at: t} }), m.animate())
+	}
+	return nil
+}
+
 // clampSelections keeps the selection indexes valid after a detail refresh.
 func (m *Model) clampSelections() {
 	if m.stageSel >= len(m.detail.Stages) {
@@ -415,6 +579,19 @@ func (m *Model) clampSelections() {
 	}
 	if m.stageSel < 0 {
 		m.stageSel = 0
+	}
+}
+
+// clampPubSelection keeps the plan selection valid after a state refresh.
+func (m *Model) clampPubSelection() {
+	if m.pubState == nil {
+		return
+	}
+	if m.pubSel >= len(m.pubState.Plans) {
+		m.pubSel = max(0, len(m.pubState.Plans)-1)
+	}
+	if m.pubSel < 0 {
+		m.pubSel = 0
 	}
 }
 
@@ -463,6 +640,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleWizardKey(msg)
 	case screenRun:
 		return m.handleRunKey(msg)
+	case screenPublish:
+		return m.handlePublishKey(msg)
 	}
 	return m, nil
 }
@@ -483,10 +662,29 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.executing = false // the cancel is confirmed; quit must not ask again
 			m.status = "cancelling run…"
 			return m, tea.Batch(m.finishRun(m.activeID), m.maybePoll())
+		case confirmApprovePub:
+			m.status = "preparing publication plans…"
+			return m, m.approvePubCmd(m.pubRun)
+		case confirmResumePub:
+			m.status = "resuming publication…"
+			return m, m.resumePubCmd(m.pubRun)
+		case confirmCancelPub:
+			m.pubSvc.CancelPublication()
+			m.status = "cancelling publication…"
+			return m, tea.Batch(m.watchPubDone(), m.maybePollPub())
+		case confirmPubBack:
+			m.pubSvc.CancelPublication()
+			m.status = "cancelling publication…"
+			return m.backToRunDetail()
+		case confirmQuitPub:
+			m.pubSvc.CancelPublication()
+			return m, tea.Quit
 		}
 	case "n", "N", "esc":
 		if c.kind == confirmQuitRunning {
 			m.status = ""
+		} else if c.kind >= confirmApprovePub {
+			m.status = "dismissed — nothing changed"
 		} else {
 			m.status = "cancel dismissed"
 		}
@@ -870,6 +1068,16 @@ func (m Model) handleRunKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.requestResume(id)
+	case "p":
+		if m.executing || !isTerminal(m.detail.Status) {
+			m.status = "the run must finish before it can be published"
+			return m, nil
+		}
+		if m.pubSvc == nil {
+			m.status = "publication is not available in this environment"
+			return m, nil
+		}
+		return m.gotoPublish(id)
 	case "t":
 		stage := m.selectedStage()
 		if stage == "" {
@@ -912,4 +1120,195 @@ func (m Model) selectedStage() string {
 		return ""
 	}
 	return m.detail.Stages[m.stageSel].Name
+}
+
+// ---------------------------------------------------------------------------
+// Publication screen (v0.6, #122)
+// ---------------------------------------------------------------------------
+
+// gotoPublish enters the publication review screen for id. The entry
+// projection prepares the run's plans (a gate-checked, non-publishing state
+// change) and re-runs the dry-run previews.
+func (m Model) gotoPublish(id string) (Model, tea.Cmd) {
+	m.activeID = id
+	m.pubRun = id
+	m.pubState = nil
+	m.pubErr = ""
+	m.pubSel = 0
+	m.pubPhase = pubReview
+	m.screen = screenPublish
+	m.status = ""
+	m.err = ""
+	return m, tea.Batch(m.loadPublicationState(id, PublicationOptions{Prepare: true, Preview: true}), m.maybePollPub())
+}
+
+// backToRunDetail leaves the publication screen back to the run view.
+func (m Model) backToRunDetail() (Model, tea.Cmd) {
+	id := m.activeID
+	m.screen = screenRun
+	m.pubRun = ""
+	m.pubState = nil
+	m.pubErr = ""
+	m.pubSel = 0
+	m.pubPhase = pubReview
+	m.status = ""
+	m.err = ""
+	return m, m.refreshDetail(id)
+}
+
+// handlePublishKey implements the publication screen keys. The global keys
+// (ctrl+l, ?) and the confirmation modal are handled before this.
+func (m Model) handlePublishKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch keyName(msg) {
+	case "ctrl+c":
+		if m.pubPhase == pubRunning {
+			return m.requestPubQuit()
+		}
+		return m.requestQuit()
+	}
+	switch m.pubPhase {
+	case pubRunning:
+		switch keyName(msg) {
+		case "c":
+			return m.requestPubCancel()
+		case "q", "esc":
+			if keyName(msg) == "q" {
+				return m.requestPubQuit()
+			}
+			return m.requestPubBack()
+		}
+		return m, nil
+	}
+	// pubReview and pubDone.
+	switch keyName(msg) {
+	case "q":
+		return m.requestPubQuit()
+	case "esc":
+		return m.backToRunDetail()
+	case "j", "down", "k", "up":
+		if m.pubState == nil || len(m.pubState.Plans) == 0 {
+			return m, nil
+		}
+		delta := 1
+		if keyName(msg) == "k" || keyName(msg) == "up" {
+			delta = -1
+		}
+		n := len(m.pubState.Plans)
+		m.pubSel = (m.pubSel + delta + n) % n
+		return m, nil
+	case "a":
+		return m.requestPubApprove()
+	case "r":
+		return m.requestPubResume()
+	case "v":
+		m.verbose = !m.verbose
+		return m, nil
+	}
+	return m, nil
+}
+
+// requestPubApprove arms the explicit approval & publish confirmation when
+// the state is approvable, otherwise it reports the blocker.
+func (m Model) requestPubApprove() (Model, tea.Cmd) {
+	if m.pubState == nil {
+		m.status = "no publication state loaded yet"
+		return m, nil
+	}
+	if !m.pubState.Approvable {
+		m.status = "cannot approve: " + m.pubState.ApproveBlocker
+		return m, nil
+	}
+	n := actionablePlans(m.pubState)
+	m.confirm = &confirm{
+		kind:   confirmApprovePub,
+		prompt: fmt.Sprintf("Approve and publish %d plan(s) for run %s?", n, shortRunID(m.pubRun)),
+		detail: "This performs external side effects (site commit, thread post). Nothing publishes until you press y.",
+	}
+	m.status = ""
+	return m, nil
+}
+
+// requestPubResume arms the explicit resume confirmation when a resumable
+// plan exists, otherwise it reports the blocker.
+func (m Model) requestPubResume() (Model, tea.Cmd) {
+	if m.pubState == nil {
+		m.status = "no publication state loaded yet"
+		return m, nil
+	}
+	if !m.pubState.Resumable {
+		m.status = "nothing to resume: " + m.pubState.ResumeBlocker
+		return m, nil
+	}
+	m.confirm = &confirm{
+		kind:   confirmResumePub,
+		prompt: "Resume the failed publication?",
+		detail: "Already-published targets keep their receipts and are not re-published; the remaining targets re-run under their existing approvals.",
+	}
+	m.status = ""
+	return m, nil
+}
+
+// requestPubCancel arms the cancel confirmation for the in-flight cycle.
+func (m Model) requestPubCancel() (Model, tea.Cmd) {
+	if m.pubPhase != pubRunning {
+		m.status = "nothing to cancel"
+		return m, nil
+	}
+	m.confirm = &confirm{
+		kind:   confirmCancelPub,
+		prompt: "Cancel the in-flight publication?",
+		detail: "In-flight targets are recorded as cancelled; the state stays resumable.",
+	}
+	m.status = ""
+	return m, nil
+}
+
+// requestPubQuit quits, or asks first (and cancels on y) while a
+// publication cycle is in flight.
+func (m Model) requestPubQuit() (Model, tea.Cmd) {
+	if m.pubPhase == pubRunning {
+		m.confirm = &confirm{
+			kind:   confirmQuitPub,
+			prompt: "A publication is in progress. Cancel it and quit?",
+			detail: "The in-flight targets are recorded as cancelled; resume them later.",
+		}
+		return m, nil
+	}
+	return m, tea.Quit
+}
+
+// requestPubBack goes back to the run view, or asks first (and cancels on
+// y) while a publication cycle is in flight.
+func (m Model) requestPubBack() (Model, tea.Cmd) {
+	if m.pubPhase == pubRunning {
+		m.confirm = &confirm{
+			kind:   confirmPubBack,
+			prompt: "A publication is in progress. Cancel it and go back to the run?",
+			detail: "The in-flight targets are recorded as cancelled; resume them later.",
+		}
+		return m, nil
+	}
+	return m.backToRunDetail()
+}
+
+// actionablePlans counts the plans the approval action would cover (the
+// non-terminal ones: an already-succeeded plan is an idempotent no-op).
+func actionablePlans(st *PublicationState) int {
+	n := 0
+	for i := range st.Plans {
+		p := &st.Plans[i]
+		switch p.Status {
+		case "planned", "approved", "publishing", "failed", "partially_succeeded":
+			n++
+		}
+	}
+	return n
+}
+
+// shortRunID abbreviates a run ID for prompt strings.
+func shortRunID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12] + "…"
 }

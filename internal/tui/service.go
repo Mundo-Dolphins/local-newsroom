@@ -250,4 +250,12 @@ type RunDetail struct {
 	FinalCheck string
 	// Findings is the number of final-check findings.
 	Findings int
+
+	// PublicationStatus mirrors the manifest's publication_state summary
+	// (the v0.6 plan status; "" when the run has no plans), alongside its
+	// target counts. The run view renders these as a single line.
+	PublicationStatus    string
+	PublicationTargets   int
+	PublicationSucceeded int
+	PublicationFailed    int
 }
