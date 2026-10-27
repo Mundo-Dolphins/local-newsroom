@@ -511,10 +511,14 @@ func cycleExitMessage(id run.RunID, sum *publish.Summary, err error) string {
 	switch {
 	case sum != nil && sum.Interrupted:
 		return "publication was interrupted: resume with 'newsroom publish " + string(id) + " --resume'"
+	case err != nil:
+		// A specific cycle error (stale approval, changed artifact, gate
+		// drift, cancelled plan) wins over the generic status summary: it
+		// names the exact reason and the exact recovery step, which the
+		// status line alone would hide.
+		return err.Error()
 	case status == "failed" || status == "partially_succeeded":
 		return "publication is incomplete (a target failed): resume with 'newsroom publish " + string(id) + " --resume' (already-published targets keep their receipts and are not re-published)"
-	case err != nil:
-		return err.Error()
 	}
 	return "publication failed"
 }

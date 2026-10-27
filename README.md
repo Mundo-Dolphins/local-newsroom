@@ -14,6 +14,7 @@ to the workspace, is resumable after failure or interruption
 (`review.md`).
 
 Full operator guide: [`docs/first-usable-workflow.md`](docs/first-usable-workflow.md)
+v0.6 site & social publication guide: [`docs/operator-guide-v0.6.md`](docs/operator-guide-v0.6.md)
 
 ## Configuration
 
@@ -218,6 +219,11 @@ count, dry-run results, warnings) and receives the approval as a domain
 value. A later failure never deletes what is already public: the summary
 names what exists where and gives the manual next steps (verify, complete,
 retry, push/merge the local commit, or re-approve a new plan).
+
+The end-to-end operator workflow for all of the above — bundle setup, Hugo
+and Bluesky destination configuration, the preview/approve/publish/resume
+cycle, exit codes, reading receipts, and the manual push/merge step — is in
+[docs/operator-guide-v0.6.md](docs/operator-guide-v0.6.md).
 
 ## Research Command
 
