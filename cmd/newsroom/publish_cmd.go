@@ -437,6 +437,18 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 		return exitf(2, "%v", err)
 	}
 
+	// The readiness gate is the release gate and wins over destination
+	// preparation: a run that is not ready (failed, cancelled, unfinished,
+	// missing output) is reported as exit 3, even though its destinations
+	// also cannot be prepared — the missing output is a symptom of the
+	// not-ready state, and the gate says so first.
+	if !ready {
+		printNotReady(m, readyReason)
+		msg := fmt.Sprintf("run %s is not ready for publication: %s", id, readyReason)
+		emitJSON(m, ready, readyReason, pub, "preview", 3, nil, false, msg)
+		return exitf(3, "run %s is not ready for publication: %s", id, readyReason)
+	}
+
 	// Destinations whose content could not be prepared for this run are
 	// reported: an explicitly selected broken destination is a hard error;
 	// an unselected one is a warning and is simply excluded.
@@ -446,14 +458,6 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	}
 	if len(usable) == 0 {
 		return exitf(4, "nothing to publish: no destination of preset %q can be prepared for run %s", pub.Name, id)
-	}
-
-	// Not-ready runs stop before any plan exists.
-	if !ready {
-		printNotReady(m, readyReason)
-		msg := fmt.Sprintf("run %s is not ready for publication: %s", id, readyReason)
-		emitJSON(m, ready, readyReason, pub, "preview", 3, nil, false, msg)
-		return exitf(3, "run %s is not ready for publication: %s", id, readyReason)
 	}
 
 	// Persist the canonical content (the plan baselines to the bytes on
@@ -471,9 +475,9 @@ func doPublishNew(ctx context.Context, eng *publish.Engine, orch *publish.Orches
 	printNewPreview(m, pub, ready, views)
 
 	if !publishFlags.approve {
-		if actionableCount(views) == 0 {
+		if actionableCount(views) == 0 && !jsonMode() {
 			fmt.Println("All plans are already published: this invocation is an idempotent no-op.")
-		} else {
+		} else if !jsonMode() {
 			printPreviewNextSteps(id, views)
 		}
 		emitJSON(m, ready, readyReason, pub, "preview", 0, views, false, "")
@@ -709,6 +713,9 @@ func shortHash(h string) string {
 
 // printNotReady explains why the run cannot be published yet.
 func printNotReady(m *run.Manifest, reason string) {
+	if jsonMode() {
+		return // the JSON report carries ready/ready_reason; stdout stays machine-readable
+	}
 	fmt.Printf("Run %s\n", m.ID)
 	fmt.Printf("  Topic:  %s\n", displayTopic(m))
 	fmt.Printf("  Status: %s\n", m.Status)
