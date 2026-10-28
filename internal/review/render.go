@@ -148,6 +148,7 @@ func (b *Bundle) renderHeader(out *strings.Builder) {
 		row("Finished", b.FinishedAt.String())
 	}
 	row("Profile", profileLine(b))
+	row("Recipe", recipeLine(b))
 	row("Model", modelLine(b))
 	row("Output format", configValue(b, formatKey))
 	row("Quality threshold", configValue(b, qualityKey))
@@ -174,6 +175,19 @@ func profileLine(b *Bundle) string {
 	}
 	if b.ProfilePath != "" {
 		line += " — " + esc(b.ProfilePath)
+	}
+	return line
+}
+
+// recipeLine renders the editorial recipe line (v0.6); standard runs (no
+// recipe) show nothing in the header at all.
+func recipeLine(b *Bundle) string {
+	if b.RecipeID == "" {
+		return ""
+	}
+	line := "`" + esc(b.RecipeID) + "`"
+	if b.RecipeHash != "" {
+		line += " (hash " + esc(b.RecipeHash) + ")"
 	}
 	return line
 }

@@ -169,39 +169,59 @@ func (m Model) renderNew(height int) string {
 
 	// 1. Topic
 	focus := labels[0] == "topic" && w.field == 0
-	b.WriteString(m.renderFieldLine(0, "topic", stFocus.Render("> ")+" "+truncate(w.topic.buf, 60), "the editorial topic (required)", focus, &b))
+	topicNote := "the editorial topic"
+	if w.recipe.current().label != "" && w.recipe.current().label != "(none)" {
+		topicNote = "the editorial topic (a selected recipe may derive it)"
+	}
+	b.WriteString(m.renderFieldLine(0, "topic", stFocus.Render("> ")+" "+truncate(w.topic.buf, 60), topicNote, focus, &b))
 	b.WriteString("\n")
 
-	// 2. Profile
-	b.WriteString(m.renderFieldLine(1, "profile", w.profile.current().label, "(none) uses no profile", w.field == 1, &b))
+	// 2. Recipe
+	b.WriteString(m.renderFieldLine(1, "recipe", w.recipe.current().label, "a declarative format preset (v0.6)", w.field == 1, &b))
 	if w.field == 1 {
+		b.WriteString("\n" + stDim.Render("   "+strings.Join(optionLabels(w.recipe), "  ")))
+	}
+	b.WriteString("\n")
+
+	// 3. Recipe inputs
+	recipeLabel := w.recipe.current().label
+	inputsNote := "not used without a recipe"
+	if recipeLabel != "" && recipeLabel != "(none)" {
+		inputsNote = "name=value pairs for the recipe (space separated)"
+	}
+	b.WriteString(m.renderFieldLine(2, "inputs", stFocus.Render("> ")+" "+truncate(w.recipeInputs.buf, 50), inputsNote, w.field == 2, &b))
+	b.WriteString("\n")
+
+	// 4. Profile
+	b.WriteString(m.renderFieldLine(3, "profile", w.profile.current().label, "(none) uses no profile", w.field == 3, &b))
+	if w.field == 3 {
 		b.WriteString("\n" + stDim.Render("   "+strings.Join(optionLabels(w.profile), "  ")))
 	}
 	b.WriteString("\n")
 
-	// 3. Format
-	b.WriteString(m.renderFieldLine(2, "format", w.format.current().label, "article, thread, or hybrid", w.field == 2, &b))
-	if w.field == 2 {
+	// 5. Format
+	b.WriteString(m.renderFieldLine(4, "format", w.format.current().label, "article, thread, or hybrid", w.field == 4, &b))
+	if w.field == 4 {
 		b.WriteString("\n" + stDim.Render("   "+strings.Join(optionLabels(w.format), "  ")))
 	}
 	b.WriteString("\n")
 
-	// 4. Source mode
-	b.WriteString(m.renderFieldLine(3, "source mode", w.mode.current().label, "how sources are obtained", w.field == 3, &b))
-	if w.field == 3 {
+	// 6. Source mode
+	b.WriteString(m.renderFieldLine(5, "source mode", w.mode.current().label, "how sources are obtained", w.field == 5, &b))
+	if w.field == 5 {
 		b.WriteString("\n" + stDim.Render("   "+strings.Join(optionLabels(w.mode), "  ")))
 	}
 	b.WriteString("\n")
 
-	// 5. URLs
+	// 7. URLs
 	urlNote := "one or more, space separated"
 	if w.mode.current().label == "auto (search)" {
 		urlNote = "not used in auto mode"
 	}
-	b.WriteString(m.renderFieldLine(4, "URLs", stFocus.Render("> ")+" "+truncate(w.urls.buf, 60), urlNote, w.field == 4, &b))
+	b.WriteString(m.renderFieldLine(6, "URLs", stFocus.Render("> ")+" "+truncate(w.urls.buf, 60), urlNote, w.field == 6, &b))
 	b.WriteString("\n")
 
-	// 6. Follow-up
+	// 8. Follow-up
 	fu := "off"
 	if w.followUp {
 		fu = "on"
@@ -209,7 +229,7 @@ func (m Model) renderNew(height int) string {
 	if !w.followUpOn {
 		fu += " (needs search)"
 	}
-	b.WriteString(m.renderFieldLine(5, "follow-up", fu, "y/n toggle: research unresolved claims", w.field == 5, &b))
+	b.WriteString(m.renderFieldLine(7, "follow-up", fu, "y/n toggle: research unresolved claims", w.field == 7, &b))
 
 	if w.err != "" {
 		b.WriteString("\n\n" + stErr.Render("  "+w.err))

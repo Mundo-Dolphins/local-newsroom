@@ -65,6 +65,10 @@ type Bundle struct {
 	ModelName     string
 	ModelEndpoint string
 
+	// --- Editorial recipe metadata (v0.6; "" for standard runs) ---------
+	RecipeID   string
+	RecipeHash string
+
 	// Config is the run's configuration snapshot (values already redacted at
 	// manifest construction).
 	Config map[string]string
@@ -309,6 +313,10 @@ func Build(store runner.Store, m *run.Manifest) (*Bundle, error) {
 		b.ProfileID = m.Profile.ID
 		b.ProfilePath = m.Profile.SourcePath
 		b.ProfileHash = m.Profile.Hash
+	}
+	if m.Recipe != nil {
+		b.RecipeID = m.Recipe.ID
+		b.RecipeHash = m.Recipe.Hash
 	}
 	b.ModelProvider = m.Model.Provider
 	b.ModelName = m.Model.Model

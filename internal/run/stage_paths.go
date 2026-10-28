@@ -15,6 +15,12 @@ const (
 	// the discovery stage (every source mode).
 	ArtifactPathSourcesIndex = "sources/index.json"
 
+	// ArtifactPathResolvedRecipe is the resolved (merged) recipe document
+	// persisted by the discovery stage (v0.6 editorial recipes). Later
+	// stages read this file so a resumed run executes the exact recipe the
+	// run started with.
+	ArtifactPathResolvedRecipe = "recipe/resolved.json"
+
 	// ArtifactPathFetchIndex records the outcome of every attempted URL
 	// retrieval (written by the fetch stage).
 	ArtifactPathFetchIndex = "fetch/index.json"
@@ -40,6 +46,11 @@ const (
 
 	// ArtifactPathArtifact is the editorial artifact (write stage output).
 	ArtifactPathArtifact = "write/artifact.json"
+
+	// ArtifactPathContentPlan is the content plan computed by the write
+	// stage for recipe runs (v0.6 editorial recipes): the expanded
+	// blueprint with per-unit claim traceability.
+	ArtifactPathContentPlan = "write/content-plan.json"
 
 	// ArtifactPathFinalCheck is the final factual-check result. The file is
 	// always persisted when the stage executes; it is referenced on the

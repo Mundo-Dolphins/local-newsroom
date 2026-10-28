@@ -47,10 +47,10 @@ import (
 // are backward compatible.
 //
 // Schema lineage: 0.5.0 introduced the manifest. 0.6.0 adds the optional
-// publication_state summary field (v0.6 controlled publication) and changes
-// nothing else: manifests written by 0.5.0 load unchanged (the field is
-// absent, i.e. "no publication state yet"), and every 0.5.0 rule still
-// applies.
+// publication_state summary field (v0.6 controlled publication) and the
+// optional recipe field (v0.6 editorial recipes); nothing else changes:
+// manifests written by 0.5.0 load unchanged (both fields absent), and every
+// 0.5.0 rule still applies.
 const SchemaVersion = "0.6.0"
 
 // SchemaMajorCurrent is the schema major version understood by this package.
@@ -931,6 +931,9 @@ type Manifest struct {
 	// Publication is the selected publication preset, when one was selected.
 	Publication *Publication `json:"publication,omitempty"`
 
+	// Recipe is the selected editorial recipe, when one was selected (v0.6).
+	Recipe *Recipe `json:"recipe,omitempty"`
+
 	// PublicationState summarizes the run's latest persisted publication
 	// plan (v0.6). Nil when the run has no publication state yet.
 	PublicationState *PublicationState `json:"publication_state,omitempty"`
@@ -992,6 +995,9 @@ type NewManifestParams struct {
 
 	// Publication is optional.
 	Publication *Publication
+
+	// Recipe is optional.
+	Recipe *Recipe
 
 	// Model is optional; credentials must not be included (see ModelMetadata).
 	Model ModelMetadata
@@ -1069,6 +1075,7 @@ func NewManifest(p NewManifestParams) (*Manifest, error) {
 		SourceMode:    p.SourceMode,
 		Profile:       p.Profile,
 		Publication:   p.Publication,
+		Recipe:        p.Recipe,
 		Model:         p.Model,
 		Stages:        plan,
 		StartedAt:     ts,
@@ -1185,6 +1192,11 @@ func (m *Manifest) Validate() error {
 	}
 	if m.Publication != nil {
 		if err := m.Publication.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if m.Recipe != nil {
+		if err := m.Recipe.Validate(); err != nil {
 			errs = append(errs, err)
 		}
 	}

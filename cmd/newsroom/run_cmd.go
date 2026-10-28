@@ -27,6 +27,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/renderers"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/review"
@@ -91,6 +92,11 @@ type runFlags struct {
 	resume        string
 	quality       float64
 
+	// Editorial recipe (v0.6): a declarative, profile-owned format preset.
+	recipe       string
+	recipeAuthor string
+	recipeInputs []string
+
 	// LLM configuration (resolved through the precedence chain).
 	llmBaseURL string
 	llmModel   string
@@ -138,6 +144,10 @@ func init() {
 	f.BoolVar(&rf.followUp, "follow-up", false, "enable bounded follow-up research for unresolved claims (requires search)")
 	f.StringVar(&rf.resume, "resume", "", "resume an existing run by ID instead of creating a new run")
 	f.Float64Var(&rf.quality, "quality-threshold", 0, "verification quality score (0-100) below which a warning is recorded (default 60)")
+
+	f.StringVar(&rf.recipe, "recipe", "", "editorial recipe to run (recipes list / recipes show; the topic may be derived from it)")
+	f.StringVar(&rf.recipeAuthor, "recipe-author", "", "author layer for recipe resolution (default: the run's profile author)")
+	f.StringArrayVar(&rf.recipeInputs, "input", nil, "recipe input value: name=value (repeatable; must be declared by the recipe)")
 
 	f.StringVar(&rf.llmBaseURL, "llm-base-url", "", "LLM API base URL (default: OMLX_BASE_URL env or llm.base_url)")
 	f.StringVar(&rf.llmModel, "llm-model", "", "LLM model name (default: OMLX_MODEL env or llm.model)")
@@ -274,8 +284,8 @@ func doRun(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(rf.resume) != "" {
 		return doRunResume(ctx, cmd, run.RunID(strings.TrimSpace(rf.resume)))
 	}
-	if strings.TrimSpace(rf.topic) == "" {
-		return errors.New("a topic is required: use --topic, or --resume <run-id> to continue an existing run")
+	if strings.TrimSpace(rf.topic) == "" && strings.TrimSpace(rf.recipe) == "" {
+		return errors.New("a topic is required: use --topic, a --recipe whose topic derives it, or --resume <run-id> to continue an existing run")
 	}
 	return doRunNew(ctx, cmd)
 }
@@ -319,6 +329,10 @@ func doRunNew(ctx context.Context, cmd *cobra.Command) error {
 	if wsName == "" {
 		wsName = "default"
 	}
+	recipeInputs, err := parseRecipeInputs(rf.recipeInputs)
+	if err != nil {
+		return err
+	}
 	intent := runIntent{
 		Topic:            rf.topic,
 		ProfileSpec:      rf.profile,
@@ -327,6 +341,9 @@ func doRunNew(ctx context.Context, cmd *cobra.Command) error {
 		FollowUp:         rf.followUp,
 		QualityThreshold: rf.quality,
 		Workspace:        run.Workspace{Name: wsName, Path: root},
+		RecipeID:         rf.recipe,
+		RecipeAuthor:     rf.recipeAuthor,
+		RecipeInputs:     recipeInputs,
 	}
 	plan, err := planRun(ctx, intent, buildRunOverrides(cmd))
 	if err != nil {
@@ -353,6 +370,10 @@ type serviceInputs struct {
 	followUp       bool
 	archiveEnabled bool
 	profile        profiles.Injector
+	// recipe (v0.6) is the resolved editorial recipe for a recipe run (nil
+	// for standard runs); recipeInputs are its resolved input values.
+	recipe       *recipes.Resolved
+	recipeInputs []recipes.ResolvedInput
 }
 
 // buildRunServices constructs the production stage services and returns the
@@ -404,10 +425,20 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 	cfg.Research, err = researcher.New(in.llm, r.llmModel, researcher.ClientConfig{
 		Temperature:     r.temperature,
 		MaxOutputTokens: r.maxTokens,
+		Instructions:    recipeResearchInstructions(in.recipe),
 	})
 	if err != nil {
 		return cfg, fmt.Errorf("researcher: %w", err)
 	}
+
+	// The content planner for a recipe run (nil for standard runs): it
+	// turns the recipe's blueprint into the content plan the write stage
+	// persists and enforces.
+	cfg.ContentPlanner, err = buildContentPlanner(in.llm, r.llmModel, in.recipe)
+	if err != nil {
+		return cfg, fmt.Errorf("content planner: %w", err)
+	}
+	_ = in.recipeInputs
 
 	cfg.Verify, err = verifier.New(in.llm, r.llmModel, verifier.VerifierConfig{
 		Temperature:     0,
@@ -418,10 +449,11 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 	}
 
 	writerConfig := writer.WriterConfig{
-		Temperature:     r.temperature,
-		MaxOutputTokens: r.maxTokens,
-		Language:        r.language,
-		Tone:            r.tone,
+		Temperature:        r.temperature,
+		MaxOutputTokens:    r.maxTokens,
+		Language:           r.language,
+		Tone:               r.tone,
+		RecipeInstructions: recipeWriterInstructions(in.recipe),
 	}
 	if in.profile != nil {
 		writerConfig.ProfileInjector = in.profile
@@ -560,6 +592,24 @@ func dedupeURLs(in []string) []string {
 		out = append(out, u)
 	}
 	return out
+}
+
+// parseRecipeInputs turns --input name=value flags into a map. Duplicated
+// names keep the last value; values are validated again (type, constraints)
+// when the recipe's inputs are resolved.
+func parseRecipeInputs(raw []string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	m := make(map[string]string, len(raw))
+	for _, item := range raw {
+		parts := strings.SplitN(strings.TrimSpace(item), "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return nil, fmt.Errorf("invalid --input %q: expected name=value (name must be non-empty)", item)
+		}
+		m[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	return m, nil
 }
 
 // maxSourcesOrDefault applies the default source bound.

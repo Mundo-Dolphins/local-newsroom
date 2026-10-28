@@ -15,6 +15,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/editorial"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/workspace"
 )
@@ -62,6 +63,21 @@ type runIntent struct {
 	// ResumeID names an existing run to resume instead of creating a new
 	// one.
 	ResumeID run.RunID
+
+	// RecipeID selects an editorial recipe (v0.6) by id for a new run; the
+	// recipe derives the topic (when --topic is empty), the output format
+	// (when --format is empty), and the run's research/write guidance. It is
+	// ignored for a resume (the run's manifest records the recipe it used).
+	RecipeID string
+
+	// RecipeAuthor selects the author layer for recipe resolution; empty
+	// falls back to the run's profile author.
+	RecipeAuthor string
+
+	// RecipeInputs are the explicit input values (name → value) for a new
+	// run's recipe; they are validated against the recipe's declarations
+	// and win over the declared defaults.
+	RecipeInputs map[string]string
 }
 
 // runPlan is the fully wired execution stack for one run.
@@ -154,12 +170,26 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 		return nil, fmt.Errorf("loading editorial profile for resume: %w", err)
 	}
 
+	// v0.6 editorial recipe: recover the recipe the run started with from the
+	// run's own record (persisted resolved recipe, or a re-resolution anchored
+	// on the manifest hash). A resumed run must execute the same recipe.
+	var recipeResolved *recipes.Resolved
+	var recipeInputs []recipes.ResolvedInput
+	if m.Recipe != nil {
+		recipeResolved, recipeInputs, err = resumeRecipe(m, store, r)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	orchCfg := orchestrator.Config{
 		Store:            store,
 		Format:           format,
 		MaxSources:       maxSourcesOrDefault(r.maxSources),
 		ArchiveTopK:      r.archiveTopK,
 		QualityThreshold: r.quality,
+		Recipe:           recipeResolved,
+		RecipeInputs:     recipeInputs,
 	}
 	orchCfg, err = buildRunServices(ctx, orchCfg, serviceInputs{
 		llm:            r.newLLMClient(),
@@ -167,6 +197,8 @@ func planRunResume(ctx context.Context, r *runResolved, intent runIntent, store 
 		followUp:       followUpEnabled,
 		archiveEnabled: archiveEnabled,
 		profile:        profileInst,
+		recipe:         recipeResolved,
+		recipeInputs:   recipeInputs,
 	})
 	if err != nil {
 		return nil, err
@@ -258,6 +290,25 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 		}
 	}
 
+	// --- Editorial recipe (v0.6) -----------------------------------------
+	//
+	// The recipe is data owned by the profile layout: it is loaded (common
+	// layer + author override), its inputs are resolved with the explicit
+	// --input values winning over defaults, and the run's topic and format
+	// are derived from it where the operator left them empty. It never
+	// changes engine behavior beyond its declarative guidance.
+	var (
+		recipeRef           *run.Recipe
+		serviceRecipe       *recipes.Resolved
+		serviceRecipeInputs []recipes.ResolvedInput
+	)
+	if strings.TrimSpace(intent.RecipeID) != "" {
+		recipeRef, serviceRecipe, serviceRecipeInputs, intent, err = resolveRecipe(r, preset, intent)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// --- Workspace ---------------------------------------------------------
 	ws := intent.Workspace
 	if err := ws.Validate(); err != nil {
@@ -317,7 +368,7 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 	}
 
 	now := time.Now().UTC()
-	m, err := run.NewManifest(run.NewManifestParams{
+	cfg := &run.NewManifestParams{
 		Workspace:   ws,
 		Topic:       strings.TrimSpace(intent.Topic),
 		SourceMode:  mode,
@@ -327,7 +378,9 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 		Config:      snap,
 		Stages:      run.CanonicalStages(),
 		StartedAt:   now,
-	})
+		Recipe:      recipeRef,
+	}
+	m, err := run.NewManifest(*cfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating run manifest: %w", err)
 	}
@@ -340,6 +393,8 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 		MaxSources:       maxSourcesOrDefault(r.maxSources),
 		ArchiveTopK:      r.archiveTopK,
 		QualityThreshold: quality,
+		Recipe:           serviceRecipe,
+		RecipeInputs:     serviceRecipeInputs,
 	}
 	orchCfg, err = buildRunServices(ctx, orchCfg, serviceInputs{
 		llm:            r.newLLMClient(),
@@ -347,6 +402,8 @@ func planRunNew(ctx context.Context, r *runResolved, intent runIntent, ovs map[s
 		followUp:       intent.FollowUp,
 		archiveEnabled: archiveEnabled,
 		profile:        profileInst,
+		recipe:         serviceRecipe,
+		recipeInputs:   serviceRecipeInputs,
 	})
 	if err != nil {
 		return nil, err

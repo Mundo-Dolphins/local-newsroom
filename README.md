@@ -225,6 +225,44 @@ and Bluesky destination configuration, the preview/approve/publish/resume
 cycle, exit codes, reading receipts, and the manual push/merge step — is in
 [docs/operator-guide-v0.6.md](docs/operator-guide-v0.6.md).
 
+## Editorial Recipes
+
+An **editorial recipe** is a YAML document in the profile tree that declares
+a recurring authored format — its topic template, inputs, output shape, source
+policy, research guidance, and the output blueprint the article or thread must
+implement. Recipes are **data, never code**: the engine parses, validates,
+merges, and constrains them; a run executes them through the standard pipeline
+with its usual factual gates. Full reference:
+[docs/recipes-v0.6.md](docs/recipes-v0.6.md).
+
+```
+<profiles root>/common/recipes/<id>.yaml        base document
+<profiles root>/authors/<author>/recipes/<id>.yaml   optional author override
+```
+
+```bash
+newsroom recipes list --profile-root profiles        # merged summaries
+newsroom recipes show afc-east-weekly --author javi  # the resolved document
+newsroom run --recipe afc-east-weekly --input week=7 # run it
+```
+
+- A recipe may **derive the run topic and format** when `--topic`/`--format`
+  are not given; explicit flags always win.
+- Its **source policy** narrows discovery (preferred/required domains, seeded
+  queries, time window, lower source budget) and can forbid explicit `--url`
+  sources; engine ceilings still apply.
+- Its **blueprint** expands into a content plan with per-unit claim
+  traceability that the write stage enforces deterministically (required
+  units appear or the run warns/fails per `missing_policy`) — the engine
+  never fabricates content.
+- The run manifest records the recipe's **identity and provenance** (id,
+  version, author layer, root, hash, resolved inputs); the full resolved
+  document is a run artifact (`recipe/resolved.json`), and resume verifies it
+  by hash. A run without `--recipe` is byte-identical to the standard flow.
+
+No Mundo Dolphins-specific recipe ships in this repository: the engine is
+generic, and real recipes live in user profile bundles.
+
 ## Research Command
 
 The `newsroom research` command fetches URLs, extracts content, and generates
