@@ -135,7 +135,7 @@ func resetAllCLIFlags(t *testing.T) {
 	t.Helper()
 	resetFlags(t, rootCmd, researchCmd, verifyCmd, writeCmd, finalCheckCmd,
 		archiveCmd, addCmd, searchCmd, statsCmd, configCmd, configShowCmd, configValidateCmd, helpCmd,
-		runCmd, tuiCmd, reviewCmd, publishCmd)
+		runCmd, tuiCmd, reviewCmd, publishCmd, recipesCmd, recipesListCmd, recipesShowCmd)
 
 	// pflag slice flags (e.g. --url) accumulate values on repeated Set() calls
 	// once a flag has been changed, so DefValue resets do not clear them.
@@ -150,6 +150,10 @@ func resetAllCLIFlags(t *testing.T) {
 	}
 	rf.urls = nil
 	if f := runCmd.Flags().Lookup("url"); f != nil {
+		f.Changed = false
+	}
+	rf.recipeInputs = nil
+	if f := runCmd.Flags().Lookup("input"); f != nil {
 		f.Changed = false
 	}
 	publishFlags.targets = nil

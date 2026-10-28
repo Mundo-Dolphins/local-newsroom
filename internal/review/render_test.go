@@ -307,3 +307,30 @@ func TestRenderSucceededRunHeaderReady(t *testing.T) {
 		t.Fatalf("succeeded+pass output must be READY:\n%s", doc)
 	}
 }
+
+// TestRenderRecipeLine covers the v0.6 recipe row: rendered for recipe
+// runs, absent (empty value skips the row) for standard runs.
+func TestRenderRecipeLine(t *testing.T) {
+	b := &Bundle{
+		Status:   run.RunStatusSucceeded,
+		RunID:    "run-20260711T100000Z-abcdef01",
+		Topic:    "t",
+		RecipeID: "afc-east-weekly",
+	}
+	doc := b.Render()
+	if !strings.Contains(doc, "| **Recipe** | `afc-east-weekly` |") {
+		t.Errorf("recipe row missing:\n%s", doc)
+	}
+
+	b.RecipeHash = "deadbeef"
+	doc = b.Render()
+	if !strings.Contains(doc, "(hash `deadbeef`)") && !strings.Contains(doc, "(hash deadbeef)") {
+		t.Errorf("recipe hash missing:\n%s", doc)
+	}
+
+	// Standard run: no recipe row at all.
+	standard := &Bundle{Status: run.RunStatusSucceeded, RunID: "run-20260711T100000Z-abcdef02", Topic: "t"}
+	if strings.Contains(standard.Render(), "**Recipe**") {
+		t.Error("standard run must not render a recipe row")
+	}
+}

@@ -159,24 +159,37 @@ func MergeCandidateConfig(base *candidate.Config, maxCandidates int) *candidate.
 //
 // Context cancellation:
 //   - If context is cancelled, returns error with ErrDiscoveryCancelled
-func (d *Discovery) Discover(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint) (*DiscoveryResult, error) {
-	// Step 1: Generate search plan
-	plan, err := d.planner.Generate(ctx, topic, language, timeRangeHint)
-	if err != nil {
-		return nil, &DiscoveryError{
-			Code:    "planner_failed",
-			Message: "failed to generate search plan: " + err.Error(),
-			QueryResults: []QueryResult{{
-				QueryIndex: -1,
-				QueryText:  topic,
-				Status:     QueryStatusFailed,
-				Error:      err.Error(),
-			}},
-			Diagnostics: []Diagnostic{{
-				Level:   DiagnosticLevelError,
-				Code:    "planner_error",
-				Message: err.Error(),
-			}},
+func (d *Discovery) Discover(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint, opts ...Option) (*DiscoveryResult, error) {
+	co := &callOptions{}
+	for _, opt := range opts {
+		opt(co)
+	}
+
+	// Step 1: Generate search plan — either via the planner, or directly
+	// from the recipe's seed queries (a deterministic replacement: the
+	// queries are still bounded by the configured query budget).
+	var plan *planner.SearchPlan
+	if len(co.seedQueries) > 0 {
+		plan = seedPlan(topic, language, timeRangeHint, co.seedQueries, d.config.MaxSearchQueries)
+	} else {
+		var err error
+		plan, err = d.planner.Generate(ctx, topic, language, timeRangeHint)
+		if err != nil {
+			return nil, &DiscoveryError{
+				Code:    "planner_failed",
+				Message: "failed to generate search plan: " + err.Error(),
+				QueryResults: []QueryResult{{
+					QueryIndex: -1,
+					QueryText:  topic,
+					Status:     QueryStatusFailed,
+					Error:      err.Error(),
+				}},
+				Diagnostics: []Diagnostic{{
+					Level:   DiagnosticLevelError,
+					Code:    "planner_error",
+					Message: err.Error(),
+				}},
+			}
 		}
 	}
 
@@ -184,7 +197,7 @@ func (d *Discovery) Discover(ctx context.Context, topic string, language string,
 	if len(plan.Queries) == 0 {
 		return nil, &DiscoveryError{
 			Code:    "no_queries",
-			Message: "planner generated no search queries",
+			Message: "no search queries to execute",
 		}
 	}
 

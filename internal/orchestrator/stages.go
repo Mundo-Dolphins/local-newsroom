@@ -15,6 +15,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/runner"
@@ -176,6 +177,17 @@ func (o *Orchestrator) runDiscovery(ctx context.Context, in *runner.StageInput) 
 	}
 	out := &runner.StageOutput{}
 
+	// v0.6 editorial recipe: persist the resolved recipe as the run's first
+	// stage output so later stages — and any resume — use the exact document
+	// the run started with.
+	if o.hasRecipe() {
+		f, err := o.persistResolvedRecipe(in)
+		if err != nil {
+			return nil, err
+		}
+		out.Files = append(out.Files, f)
+	}
+
 	switch mode {
 	case run.SourceModeExplicit:
 		if len(explicit) == 0 {
@@ -187,7 +199,13 @@ func (o *Orchestrator) runDiscovery(ctx context.Context, in *runner.StageInput) 
 		if o.cfg.Discovery == nil {
 			return nil, errors.New("discovery: source mode requires discovery, but no Discovery service is configured (pass --url flags or configure search)")
 		}
-		res, err := o.cfg.Discovery.Discover(ctx, in.Manifest.Topic, idx.Language, nil)
+		var res *discovery.DiscoveryResult
+		var err error
+		if o.hasRecipe() {
+			res, err = o.discoverRecipeRun(ctx, in.Manifest.Topic, idx.Language, o.discoveryRecipeOptions())
+		} else {
+			res, err = o.defaultDiscoverRun(ctx, in.Manifest.Topic, idx.Language)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("discovery: %w", err)
 		}
@@ -198,7 +216,21 @@ func (o *Orchestrator) runDiscovery(ctx context.Context, in *runner.StageInput) 
 		}
 		idx.Queries = res.PlannedQueries
 		idx.Candidates = res.Candidates
-		selected := selectCandidateURLs(res.Candidates, o.maxSourcesFromRun(in))
+
+		// The recipe's source policy only narrows the selection: preferred
+		// domains order candidates first, the recipe's max_sources clamps the
+		// budget, and required domains fail closed when no source matches.
+		cands := res.Candidates
+		if sp := o.recipeSourcePolicy(); sp != nil {
+			cands = preferredFirst(res.Candidates, sp.PreferredDomains)
+		}
+		selected := selectCandidateURLs(cands, o.recipeMaxSources(o.maxSourcesFromRun(in)))
+		if sp := o.recipeSourcePolicy(); sp != nil && len(sp.RequiredDomains) > 0 {
+			selected, err = applyRequiredDomains(selected, sp.RequiredDomains)
+			if err != nil {
+				return nil, fmt.Errorf("discovery: %w", err)
+			}
+		}
 		if mode == run.SourceModeSupplement {
 			selected = mergeURLs(explicit, selected)
 		}
@@ -503,15 +535,69 @@ func (o *Orchestrator) runWrite(ctx context.Context, in *runner.StageInput) (*ru
 	if err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
-	artifact, err := o.cfg.Write.Generate(ctx, vres)
+	out := &runner.StageOutput{}
+
+	// v0.6 editorial recipe: when the recipe declares an output blueprint,
+	// compute the content plan (blueprint expansion with per-unit claim
+	// traceability) and persist it as the write stage's durable record.
+	var plan *contracts.ContentPlan
+	if o.hasRecipe() {
+		if o.cfg.ContentPlanner == nil {
+			out.Warnings = append(out.Warnings, runner.Warning{
+				Code:    "recipe.no_content_planner",
+				Message: "the recipe declares an output blueprint but no content planner is configured; writing without a plan",
+			})
+		} else {
+			plan, err = o.cfg.ContentPlanner.Plan(ctx, o.cfg.Recipe, vres, o.cfg.Format, o.cfg.RecipeInputs)
+			if err != nil {
+				return nil, fmt.Errorf("write: content plan: %w", err)
+			}
+			if plan != nil {
+				f, err := o.stageFile(run.ArtifactKindCustom, run.ArtifactPathContentPlan, plan)
+				if err != nil {
+					return nil, err
+				}
+				out.Files = append(out.Files, f)
+			}
+		}
+	}
+
+	var artifact *contracts.EditorialArtifact
+	if plan != nil {
+		if pws, ok := o.cfg.Write.(PlannedWriteService); ok {
+			artifact, err = pws.GenerateWithPlan(ctx, vres, plan)
+		} else {
+			artifact, err = o.cfg.Write.Generate(ctx, vres)
+		}
+	} else {
+		artifact, err = o.cfg.Write.Generate(ctx, vres)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
+
+	// Deterministic plan enforcement: the engine checks the artifact against
+	// the plan and applies the recipe's missing policy to unsupported or
+	// absent REQUIRED units (warn or fail) — it never fabricates content to
+	// satisfy a unit.
+	if plan != nil {
+		policy := recipes.MissingWarn
+		if bp := o.cfg.Recipe.Recipe.Blueprint; bp != nil && bp.MissingPolicy != "" {
+			policy = bp.MissingPolicy
+		}
+		warnings, err := enforceContentPlan(plan, artifact, vres, policy)
+		if err != nil {
+			return nil, fmt.Errorf("write: %w", err)
+		}
+		out.Warnings = append(out.Warnings, warnings...)
+	}
+
 	f, err := o.stageFile(run.ArtifactKindEditorial, artifactPath, artifact)
 	if err != nil {
 		return nil, err
 	}
-	return &runner.StageOutput{Files: []runner.StageFile{f}}, nil
+	out.Files = append(out.Files, f)
+	return out, nil
 }
 
 // runFinalCheck runs the final factual check. The result is always written

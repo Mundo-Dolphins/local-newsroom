@@ -1102,7 +1102,7 @@ func TestBuildUserPrompt(t *testing.T) {
 		ArtifactType: "article",
 	}
 
-	prompt := buildUserPrompt(verificationResult, map[string]string{}, config)
+	prompt := buildUserPrompt(verificationResult, map[string]string{}, config, nil)
 
 	// Verify prompt contains expected sections
 	assert.Contains(t, prompt, "PROFILE/INSTRUCTIONS")

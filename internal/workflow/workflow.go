@@ -664,7 +664,10 @@ func (a *llmToPlannerClientAdapter) Complete(ctx context.Context, req planner.Re
 type discoveryService interface {
 	// Discover performs source discovery and returns candidates.
 	// The candidates can then be used as URLs for fetching.
-	Discover(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint) (*discovery.DiscoveryResult, error)
+	// The variadic options (v0.6 editorial recipes) allow a run to narrow
+	// discovery (seed queries); callers that pass none get the standard
+	// planner-driven behavior.
+	Discover(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint, opts ...discovery.Option) (*discovery.DiscoveryResult, error)
 }
 
 // fetchFailure represents a failed URL fetch (internal type).

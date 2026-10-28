@@ -37,10 +37,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/archiverev"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/contentplan"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/followup"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/researcher"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/resume"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
@@ -93,8 +95,12 @@ type Planner interface {
 
 // DiscoveryService discovers candidate source URLs for a topic. Satisfied by
 // *discovery.Discovery.
+//
+// The variadic options (v0.6 editorial recipes) only narrow discovery
+// (seed queries, budgets); they are never required and a plain call
+// (no options) behaves exactly as before.
 type DiscoveryService interface {
-	Discover(ctx context.Context, topic string, language string, hint *planner.TimeRangeHint) (*discovery.DiscoveryResult, error)
+	Discover(ctx context.Context, topic string, language string, hint *planner.TimeRangeHint, opts ...discovery.Option) (*discovery.DiscoveryResult, error)
 }
 
 // FetchedSource is the orchestrator's view of one URL retrieval. The raw
@@ -155,6 +161,15 @@ type FollowUpService interface {
 // profile (when loaded) is baked into the writer's own configuration.
 type WriteService interface {
 	Generate(ctx context.Context, verification *contracts.VerificationResult) (*contracts.EditorialArtifact, error)
+}
+
+// PlannedWriteService is the optional v0.6 extension of [WriteService]:
+// writers that accept a recipe content plan (the expanded output blueprint
+// with per-unit claim traceability) implement it. Runs without a recipe
+// never call it, so existing writers stay untouched.
+type PlannedWriteService interface {
+	WriteService
+	GenerateWithPlan(ctx context.Context, verification *contracts.VerificationResult, plan *contracts.ContentPlan) (*contracts.EditorialArtifact, error)
 }
 
 // CheckService performs the final factual check. Satisfied by
@@ -221,6 +236,23 @@ type Config struct {
 
 	// QualityThreshold (0-100) below which a low-quality warning is recorded.
 	QualityThreshold float64
+
+	// Recipe is the resolved editorial recipe for the run (v0.6). Nil means
+	// a standard run: no recipe file is written, discovery research and
+	// write stages behave exactly as before. When set, the discovery stage
+	// persists it (recipe/resolved.json) and the research/write stages apply
+	// its budgets, instructions, and blueprint.
+	Recipe *recipes.Resolved
+
+	// RecipeInputs are the resolved input values of the configured recipe
+	// (the values a run's --input flags resolved to). Used to render recipe
+	// templates; empty for standard runs.
+	RecipeInputs []recipes.ResolvedInput
+
+	// ContentPlanner computes the content plan for recipe runs (v0.6).
+	// Optional: nil disables plan-driven writing (the recipe blueprint is
+	// ignored with a warning rather than failing).
+	ContentPlanner contentplan.Service
 
 	// Clock supplies timestamps. Defaults to time.Now (UTC).
 	Clock runner.Clock

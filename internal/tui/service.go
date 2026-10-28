@@ -89,6 +89,10 @@ type Info struct {
 	// ProfilesDefault is the profiles.name value from the configuration
 	// chain ("" when none is configured).
 	ProfilesDefault string
+
+	// Recipes lists the available editorial recipes (v0.6) for the run
+	// wizard ("" when no recipes root is configured).
+	Recipes []RecipeOption
 }
 
 // ProfileOption is one selectable editorial profile.
@@ -96,6 +100,16 @@ type ProfileOption struct {
 	// Spec is the profile spec to pass in NewRunIntent.Profile.
 	Spec string
 	// Detail is a short display note (e.g. the directory it was found in).
+	Detail string
+}
+
+// RecipeOption is one selectable editorial recipe (v0.6).
+type RecipeOption struct {
+	// ID is the recipe identifier to pass in NewRunIntent.Recipe.
+	ID string
+	// Title is the human name ("" falls back to the ID for display).
+	Title string
+	// Detail is a short display note (e.g. the layer it came from).
 	Detail string
 }
 
@@ -121,11 +135,20 @@ type NewRunIntent struct {
 
 	// FollowUp enables bounded follow-up research for unresolved claims.
 	FollowUp bool
+
+	// Recipe selects an editorial recipe (v0.6) by ID ("" = no recipe; the
+	// wizard offers "(none)"). A selected recipe may derive the topic and
+	// the output format.
+	Recipe string
+
+	// RecipeInputs are the recipe's input values, name → value, as typed in
+	// the wizard ("name=value" pairs).
+	RecipeInputs map[string]string
 }
 
 // Valid checks the intent's source-mode specific fields.
 func (i NewRunIntent) Valid() errorKind {
-	if i.Topic == "" {
+	if i.Topic == "" && i.Recipe == "" {
 		return errKindTopic
 	}
 	switch i.SourceMode {
@@ -171,6 +194,8 @@ type RunInfo struct {
 	SourceMode string
 	// Profile is the selected profile ID ("" when none).
 	Profile string
+	// Recipe is the selected editorial recipe ID (v0.6; "" for standard runs).
+	Recipe string
 	// Model is the LLM model name ("" when unknown).
 	Model string
 	// StartedAt is when the run was created.

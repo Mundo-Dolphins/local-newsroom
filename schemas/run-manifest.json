@@ -77,6 +77,19 @@
       },
       "description": "The publication preset selected for this run, when one was selected. Identity and provenance only: private bundle content (style text, handles, destination URLs) is never recorded."
     },
+    "recipe": {
+      "type": "object",
+      "required": ["id", "hash"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Editorial recipe identifier (kebab-case, equal to the recipe file name)." },
+        "version": { "type": "string", "maxLength": 64, "description": "The recipe's declared version, when one was declared." },
+        "author": { "type": "string", "maxLength": 64, "description": "The author layer used for resolution (\"\" = common only)." },
+        "bundle_path": { "type": "string", "description": "The recipes root directory the document was loaded from." },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{8,128}$", "description": "Digest of the resolved (merged) recipe document, so files that changed on disk since the run started are detectable on resume." },
+        "inputs": { "type": "object", "maxProperties": 32, "additionalProperties": { "type": "string", "maxLength": 8192 }, "description": "The run's resolved input values (name → value). Bounded, non-secret values only." }
+      },
+      "description": "The editorial recipe selected for this run (v0.6), when one was selected. Identity and provenance only: the full resolved recipe document is the run's persisted artifact (recipe/resolved.json), never the manifest. Absent for standard (non-recipe) runs — every 0.5.0 manifest loads with this field nil."
+    },
     "publication_state": {
       "type": "object",
       "required": ["plan_id", "plan_path", "plan_hash", "status", "targets", "succeeded", "failed", "updated_at"],

@@ -294,7 +294,9 @@ func (r followUpResearcher) Generate(ctx context.Context, topic string, document
 
 // NewWriteAdapter adapts the production writer to the orchestrator's
 // WriteService. The editorial profile (when loaded) is already baked into the
-// writer's configuration, so the adapter simply delegates.
+// writer's configuration, so the adapter simply delegates. The adapter also
+// implements PlannedWriteService (v0.6 editorial recipes): the writer's own
+// GenerateWithPlan receives the recipe's content plan.
 func NewWriteAdapter(w *writer.Writer) WriteService {
 	return writeAdapter{writer: w}
 }
@@ -305,6 +307,11 @@ type writeAdapter struct {
 
 func (a writeAdapter) Generate(ctx context.Context, verification *contracts.VerificationResult) (*contracts.EditorialArtifact, error) {
 	return a.writer.Generate(ctx, verification, nil)
+}
+
+// GenerateWithPlan implements PlannedWriteService.
+func (a writeAdapter) GenerateWithPlan(ctx context.Context, verification *contracts.VerificationResult, plan *contracts.ContentPlan) (*contracts.EditorialArtifact, error) {
+	return a.writer.GenerateWithPlan(ctx, verification, plan, nil)
 }
 
 // NewPlannerClient bridges the shared LLM client to the planner's own Client

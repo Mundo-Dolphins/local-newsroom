@@ -30,6 +30,9 @@ type Summary struct {
 	// Topic is the run's editorial topic.
 	Topic string
 
+	// Recipe is the selected editorial recipe id (v0.6; "" for standard runs).
+	Recipe string
+
 	// SourceMode is how sources were obtained (explicit, discovered, supplement).
 	SourceMode run.SourceMode
 
@@ -90,6 +93,9 @@ func BuildSummary(store runner.Store, m *run.Manifest) (*Summary, error) {
 		Topic:        m.Topic,
 		SourceMode:   m.SourceMode,
 		WorkspaceDir: runDir,
+	}
+	if m.Recipe != nil {
+		s.Recipe = m.Recipe.ID
 	}
 	if m.Result.Reason != "" {
 		s.Reason = m.Result.Reason
@@ -163,6 +169,11 @@ func (s Summary) String() string {
 	b.WriteString(" [")
 	b.WriteString(string(s.SourceMode))
 	b.WriteString("]\n")
+	if s.Recipe != "" {
+		b.WriteString("Recipe:      ")
+		b.WriteString(s.Recipe)
+		b.WriteString("\n")
+	}
 	b.WriteString("Sources:     ")
 	b.WriteString(strconv.Itoa(s.SourcesFetched))
 	b.WriteString(" of ")

@@ -60,15 +60,17 @@ const (
 
 // wizard is the "new run" form state.
 type wizard struct {
-	topic      entry
-	profile    selector
-	format     selector
-	mode       selector
-	urls       entry
-	followUp   bool
-	followUpOn bool // whether follow-up is available (search configured)
-	field      int  // focused field, 0..5
-	err        string
+	topic        entry
+	recipe       selector // (none) + the available recipes (v0.6)
+	recipeInputs entry    // "name=value" pairs for the selected recipe
+	profile      selector
+	format       selector
+	mode         selector
+	urls         entry
+	followUp     bool
+	followUpOn   bool // whether follow-up is available (search configured)
+	field        int  // focused field, 0..7
+	err          string
 }
 
 // option is one selectable entry with an availability flag.
@@ -765,6 +767,10 @@ func (m Model) gotoNewRun() (Model, tea.Cmd) {
 func (m Model) freshWizard() wizard {
 	w := wizard{
 		topic: entry{bound: 1000},
+		recipe: selector{opts: []option{
+			{label: "(none)", enabled: true},
+		}},
+		recipeInputs: entry{bound: 500},
 		profile: selector{opts: []option{
 			{label: "(none)", enabled: true},
 		}},
@@ -781,6 +787,8 @@ func (m Model) freshWizard() wizard {
 		urls:       entry{bound: 2000},
 		followUpOn: m.info.SearchConfigured,
 	}
+	// Prefill the recipe selector from the available recipes.
+	m.buildWizardRecipes()
 	// Prefill the selectors from the configured defaults when known.
 	for i, p := range m.info.Profiles {
 		w.profile.opts = append(w.profile.opts, option{
@@ -839,6 +847,35 @@ func (m *Model) buildWizardProfile() {
 	}
 }
 
+// buildWizardRecipes syncs the wizard's recipe selector with the
+// environment info (the info and wizard creation can race, so this is
+// idempotent).
+func (m *Model) buildWizardRecipes() {
+	for _, r := range m.info.Recipes {
+		id := r.ID
+		if id == "" {
+			continue
+		}
+		found := false
+		for _, o := range m.wiz.recipe.opts {
+			if o.label == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			title := r.Title
+			if title == "" {
+				title = id
+			}
+			m.wiz.recipe.opts = append(m.wiz.recipe.opts, option{label: id, enabled: true, Detail: title + " (" + r.Detail + ")"})
+		}
+	}
+	if m.wiz.recipe.sel >= len(m.wiz.recipe.opts) {
+		m.wiz.recipe.sel = 0
+	}
+}
+
 // openRun switches to the run screen and starts observing id.
 func (m Model) openRun(id, note string) (Model, tea.Cmd) {
 	m.activeID = id
@@ -876,7 +913,7 @@ func (m Model) requestRetry(id, stage string) (Model, tea.Cmd) {
 
 // wizardFields returns the field labels in focus order.
 func wizardFields() []string {
-	return []string{"topic", "profile", "format", "source mode", "URLs", "follow-up"}
+	return []string{"topic", "recipe", "inputs", "profile", "format", "source mode", "URLs", "follow-up"}
 }
 
 // handleWizardKey implements the new-run form keys.
@@ -911,13 +948,26 @@ func (m Model) handleWizardKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case 1:
 		switch keyName(msg) {
 		case "left", "h":
+			w.recipe.move(-1)
+			return m, nil
+		case "right", "l":
+			w.recipe.move(1)
+			return m, nil
+		}
+	case 2:
+		if w.recipeInputs.key(msg) {
+			return m, nil
+		}
+	case 3:
+		switch keyName(msg) {
+		case "left", "h":
 			w.profile.move(-1)
 			return m, nil
 		case "right", "l":
 			w.profile.move(1)
 			return m, nil
 		}
-	case 2:
+	case 4:
 		switch keyName(msg) {
 		case "left", "h":
 			w.format.move(-1)
@@ -926,7 +976,7 @@ func (m Model) handleWizardKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			w.format.move(1)
 			return m, nil
 		}
-	case 3:
+	case 5:
 		switch keyName(msg) {
 		case "left", "h":
 			w.mode.move(-1)
@@ -935,11 +985,11 @@ func (m Model) handleWizardKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			w.mode.move(1)
 			return m, nil
 		}
-	case 4:
+	case 6:
 		if w.urls.key(msg) {
 			return m, nil
 		}
-	case 5:
+	case 7:
 		switch msg.String() {
 		case "y", "n", " ", "enter":
 			w.followUp = !w.followUp
@@ -974,13 +1024,45 @@ func (m Model) advanceWizard() (Model, tea.Cmd) {
 func (m Model) wizardIntent() NewRunIntent {
 	w := m.wiz
 	return NewRunIntent{
-		Topic:      strings.TrimSpace(w.topic.buf),
-		Profile:    w.profile.current().label,
-		Format:     w.format.current().label,
-		SourceMode: sourceModeFromLabel(w.mode.current().label),
-		URLs:       parseURLs(w.urls.buf),
-		FollowUp:   w.followUp && w.followUpOn,
+		Topic:        strings.TrimSpace(w.topic.buf),
+		Recipe:       recipeIDFromLabel(w.recipe.current().label),
+		RecipeInputs: parseRecipeInputsRaw(w.recipeInputs.buf),
+		Profile:      w.profile.current().label,
+		Format:       w.format.current().label,
+		SourceMode:   sourceModeFromLabel(w.mode.current().label),
+		URLs:         parseURLs(w.urls.buf),
+		FollowUp:     w.followUp && w.followUpOn,
 	}
+}
+
+// recipeIDFromLabel maps the wizard's recipe labels to intent values
+// ("(none)" means no recipe).
+func recipeIDFromLabel(label string) string {
+	if label == "" || label == "(none)" {
+		return ""
+	}
+	return label
+}
+
+// parseRecipeInputsRaw splits a "name=value name2=value2" input line into a
+// map (duplicates keep the last value). Malformed pairs are dropped; the
+// run's recipe input resolution reports what is unknown or untyped.
+func parseRecipeInputsRaw(raw string) map[string]string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '\t'
+	})
+	m := make(map[string]string)
+	for _, f := range fields {
+		parts := strings.SplitN(strings.TrimSpace(f), "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			continue
+		}
+		m[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // wizardServiceError maps intent fields the service will also validate

@@ -330,20 +330,20 @@ func TestWizardNavigationAndInput(t *testing.T) {
 		t.Fatalf("topic = %q", m.wiz.topic.buf)
 	}
 
-	// Tab moves to profile; left/right cycles the selector.
+	// Tab moves to the recipe field; left/right cycles the selector.
 	m = apply(t, m, keyNameMsg("tab"), keyNameMsg("left"))
 	if m.wiz.field != 1 {
-		t.Fatalf("field = %d, want 1 (profile)", m.wiz.field)
+		t.Fatalf("field = %d, want 1 (recipe)", m.wiz.field)
 	}
-	// Default is "pub/javi" (index 1); left once lands on "(none)".
-	if got := m.wiz.profile.current().label; got != "(none)" {
+	// The default selection is "(none)" (index 0); left once wraps around.
+	if got := m.wiz.recipe.current().label; got != "(none)" {
 		t.Errorf("after left: %q, want (none)", got)
 	}
 
 	// Shift+tab walks backwards and wraps around to the URLs field.
 	m = apply(t, m, keyNameMsg("shift+tab"), keyNameMsg("shift+tab"), keyNameMsg("shift+tab"))
-	if m.wiz.field != 4 {
-		t.Fatalf("field = %d, want 4 (URLs) after wrap", m.wiz.field)
+	if m.wiz.field != 6 {
+		t.Fatalf("field = %d, want 6 (URLs) after wrap", m.wiz.field)
 	}
 	m = apply(t, m, keyR("https://ex.com/a https://ex.com/b"))
 	if got := parseURLs(m.wiz.urls.buf); len(got) != 2 {
@@ -382,7 +382,7 @@ func TestWizardValidationErrors(t *testing.T) {
 			tc.mutate(&m.wiz)
 			// Jump to the last field and press enter.
 			m = apply(t, m,
-				keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"),
+				keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"),
 				keyNameMsg("enter"))
 			if !strings.Contains(m.wiz.err, tc.want) {
 				t.Errorf("wizard error = %q, want it to contain %q", m.wiz.err, tc.want)
@@ -403,7 +403,7 @@ func TestWizardAutoModeRequiresSearch(t *testing.T) {
 	m.wiz.mode.sel = 0
 	m.wiz.topic.buf = "some topic"
 	m = apply(t, m,
-		keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"),
+		keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"), keyNameMsg("tab"),
 		keyNameMsg("enter"))
 	if !strings.Contains(m.wiz.err, "search") {
 		t.Errorf("auto mode without search should explain why, got %q", m.wiz.err)

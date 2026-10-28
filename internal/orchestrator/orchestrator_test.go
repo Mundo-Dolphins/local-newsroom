@@ -56,7 +56,7 @@ type fakeDiscovery struct {
 	calls int
 }
 
-func (f *fakeDiscovery) Discover(_ context.Context, _ string, _ string, _ *planner.TimeRangeHint) (*discovery.DiscoveryResult, error) {
+func (f *fakeDiscovery) Discover(_ context.Context, _ string, _ string, _ *planner.TimeRangeHint, _ ...discovery.Option) (*discovery.DiscoveryResult, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err

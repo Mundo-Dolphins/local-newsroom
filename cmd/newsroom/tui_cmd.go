@@ -18,6 +18,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/config"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/profiles"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/resume"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/review"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/run"
@@ -153,7 +154,60 @@ func (a *tuiApp) Info() (tui.Info, error) {
 		}
 		info.Profiles = profs
 	}
+	info.Recipes = listTUIRecipes(a)
 	return info, nil
+}
+
+// listTUIRecipes lists the editorial recipes (v0.6) available to the run
+// wizard: the bundle root when a publication is configured, otherwise the
+// profiles root. Listing failures are non-fatal (the wizard simply offers
+// no recipes).
+func listTUIRecipes(a *tuiApp) []tui.RecipeOption {
+	publication, _, _ := a.cfg.GetString(config.SettingEditorialPublication, config.Override{})
+	root := ""
+	if publication != "" {
+		if v, _, err := a.cfg.GetString(config.SettingEditorialBundle, config.Override{}); err == nil {
+			root = v
+		}
+	}
+	if root == "" {
+		if v, _, err := a.cfg.GetString(config.SettingProfilesRoot, config.Override{}); err == nil {
+			root = v
+		}
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	author := ""
+	if v, source, err := a.cfg.Resolve(config.SettingProfilesName, config.Override{}); err == nil && source != "default" && source != "" && !strings.ContainsRune(v, '/') {
+		author = v
+	}
+	loader, err := recipes.NewLoader(abs)
+	if err != nil {
+		return nil
+	}
+	summaries, err := loader.List(author)
+	if err != nil {
+		return nil
+	}
+	out := make([]tui.RecipeOption, 0, len(summaries))
+	for _, s := range summaries {
+		title := s.Title
+		if title == "" {
+			title = s.ID
+		}
+		detail := s.Layer
+		if s.OutputFormat != "" {
+			detail = s.OutputFormat + " · " + s.Layer
+		}
+		out = append(out, tui.RecipeOption{ID: s.ID, Title: title, Detail: detail})
+	}
+	return out
 }
 
 // listProfiles walks the profiles root and returns the selectable profile
@@ -258,6 +312,8 @@ func (a *tuiApp) StartNewRun(ctx context.Context, intent tui.NewRunIntent) (stri
 		FollowUp:         intent.FollowUp,
 		Workspace:        ws,
 		QualityThreshold: 0,
+		RecipeID:         strings.TrimSpace(intent.Recipe),
+		RecipeInputs:     intent.RecipeInputs,
 	}
 	plan, err := planRun(ctx, ri, a.overrides)
 	if err != nil {
@@ -493,6 +549,9 @@ func (a *tuiApp) manifestToInfo(m *run.Manifest) tui.RunInfo {
 		Warnings:   len(m.Warnings),
 		Errors:     len(m.Errors),
 		Artifacts:  len(m.Artifacts),
+	}
+	if m.Recipe != nil {
+		info.Recipe = m.Recipe.ID
 	}
 	return info
 }
