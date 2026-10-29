@@ -45,6 +45,11 @@ data/
 runs/
 cache/
 
+# Local archive database (SQLite, created at runtime)
+archive.db
+archive.db-shm
+archive.db-wal
+
 # Private profiles
 profiles/private/
 
@@ -55,3 +60,6 @@ logs/
 # Prebuilt CLI binary (go build ./cmd/newsroom writes it to the repo root;
 # the official build target outputs to dist/, which is already ignored)
 /newsroom
+
+# Prebuilt gosec binary (make gosec-sync writes it to tools/gosec/)
+/tools/gosec/gosec
