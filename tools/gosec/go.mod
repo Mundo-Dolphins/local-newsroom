@@ -6,7 +6,7 @@ module github.com/Mundo-Dolphins/local-newsroom/tools/gosec
 // golang.org/x/tools replace below is mandatory: the pinned gosec release
 // bundles an x/tools whose export-data decoder is too old for the Go 1.27
 // build cache (see doc.go). Bump both together, then run `make gosec-sync`.
-go 1.27.1
+go 1.27.3
 
 require github.com/securego/gosec/v2 v2.29.0
 
