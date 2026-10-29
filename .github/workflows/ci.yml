@@ -11,7 +11,7 @@ on:
 env:
   # renovate: datasource=golang-version depName=golang
   # Use Go 1.27.1 (pinned in go.mod) - aligned with module definition
-  GO_VERSION: "1.27.1"
+  GO_VERSION: "1.27.3"
   # Default toolchain directory
   TOOLCHAIN: ~/go/bin
 
