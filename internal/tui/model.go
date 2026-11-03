@@ -435,6 +435,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.info = msg.info
 			m.wiz.followUpOn = msg.info.SearchConfigured
 			m.buildWizardProfile()
+			m.buildWizardRecipes()
 		} else {
 			m.err = "loading configuration: " + msg.err.Error()
 		}
@@ -787,8 +788,11 @@ func (m Model) freshWizard() wizard {
 		urls:       entry{bound: 2000},
 		followUpOn: m.info.SearchConfigured,
 	}
-	// Prefill the recipe selector from the available recipes.
+	// Prefill the recipe selector from the available recipes. m is a copy,
+	// so build onto m.wiz and carry the result into w.
+	m.wiz = w
 	m.buildWizardRecipes()
+	w = m.wiz
 	// Prefill the selectors from the configured defaults when known.
 	for i, p := range m.info.Profiles {
 		w.profile.opts = append(w.profile.opts, option{
