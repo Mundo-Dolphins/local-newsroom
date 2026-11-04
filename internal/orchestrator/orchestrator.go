@@ -40,6 +40,7 @@ import (
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contentplan"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/discovery"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/entitymemory"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/followup"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/planner"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/recipes"
@@ -133,8 +134,21 @@ type SourceExtractor interface {
 
 // ResearchService synthesizes documents into a research dossier. Satisfied
 // by *researcher.Researcher.
+//
+// The optional MemoryHints method (v0.7, issue #145) accepts the rendered
+// editorial-memory hint block. Implementations that do not accept hints
+// (e.g. older or stub implementations) may simply ignore the string: the
+// hints are context, never evidence, so a no-op is a safe degradation and
+// the final-check no-bypass guard still applies to any claim a model happens
+// to produce. The orchestrator uses the type assertion below to stay
+// compatible with both.
 type ResearchService interface {
 	Generate(ctx context.Context, topic string, documents []types.Document) (*researcher.ResearchDossier, error)
+
+	// MemoryHints passes the rendered memory hint block to the research
+	// call. Implementations project it into the prompt (context, never
+	// evidence) and record the matched entity IDs on the dossier.
+	MemoryHints(ctx context.Context, topic string, documents []types.Document, hints string) (*researcher.ResearchDossier, error)
 }
 
 // ArchiveService retrieves archived documents relevant to a topic. Satisfied
@@ -174,8 +188,35 @@ type PlannedWriteService interface {
 
 // CheckService performs the final factual check. Satisfied by
 // *finalchecker.FinalFactualChecker.
+//
+// The MemoryContext setter (v0.7, issue #145) lets the orchestrator hand the
+// check the run's memory provenance, so its deterministic memory-provenance
+// check can fail the run when a verified claim was satisfied by memory alone.
+// An implementation without the hook (or a nil context) behaves exactly as
+// before.
 type CheckService interface {
 	Check(ctx context.Context, artifact *contracts.EditorialArtifact, verification *contracts.VerificationResult) (*contracts.FactualCheckResult, error)
+
+	// SetMemoryContext installs the run's memory provenance for the next
+	// Check call (nil = pre-memory behavior).
+	SetMemoryContext(*MemoryContext)
+}
+
+// MemoryContext is the run-level editorial-memory provenance the final
+// factual check needs to enforce the no-bypass invariant (issue #145): the
+// memory entities the run consulted, with the values each carried.
+//
+// The finalchecker consumes it through its MemoryContext field and its
+// deterministic memory-provenance check; the orchestrator populates it from
+// the dossier's MemoryHintIDs plus the memory store. It is provenance, not
+// evidence: it documents what the memory could have injected, and the check
+// compares that against the verified claims to catch a bypass.
+type MemoryContext struct {
+	// Entities are the memory entities the run consulted (matched by the
+	// research stage's hint projection). Empty or nil = the run projected no
+	// hints; the no-bypass check is then a no-op (there is nothing memory
+	// could have bypassed).
+	Entities []entitymemory.Entity
 }
 
 // MarkdownRenderer renders an artifact as a Markdown document. Satisfied by
@@ -256,6 +297,17 @@ type Config struct {
 
 	// Clock supplies timestamps. Defaults to time.Now (UTC).
 	Clock runner.Clock
+
+	// Memory projects the editorial memory into the planner and researcher
+	// prompts as bounded hints (issue #145). Nil (the default) runs exactly
+	// as before the memory existed: no hints, no provenance. The service is
+	// read-only context and must never be used as evidence.
+	Memory MemoryService
+
+	// MemoryClose is the cleanup hook for cfg.Memory (wired by the command
+	// layer after the run finishes, including on failure and cancellation).
+	// Nil when no memory service was created.
+	MemoryClose func() error
 }
 
 // Orchestrator executes end-to-end editorial runs.
@@ -398,6 +450,19 @@ func (o *Orchestrator) ResumeID(ctx context.Context, id run.RunID) (*Result, err
 		return nil, err
 	}
 	return &Result{RunID: r.RunID, RunDir: r.RunDir, Manifest: r.Manifest, Status: r.Status, Err: err}, err
+}
+
+// CloseMemory releases the editorial-memory database handle for this run
+// (issue #145). It is idempotent and safe to call when no memory service
+// was configured. The command layer calls it after every run (new or
+// resumed), including on failure and cancellation, so the SQLite handle is
+// always released exactly once per process lifetime for the run.
+func (o *Orchestrator) CloseMemory() {
+	if o.cfg.MemoryClose != nil {
+		_ = o.cfg.MemoryClose()
+		o.cfg.MemoryClose = nil
+		o.cfg.Memory = nil
+	}
 }
 
 // stageFile marshals a stage value into a stage output file with a fresh

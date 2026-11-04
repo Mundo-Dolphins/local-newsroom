@@ -21,6 +21,15 @@ type callOptions struct {
 	// inputs) are executed directly. They are still bounded by the
 	// configured MaxSearchQueries (truncated, never extended).
 	seedQueries []string
+
+	// memoryHints is the optional editorial-memory hint block appended to
+	// the planner prompt (issue #145). It is context, never evidence: the
+	// block may guide query formulation (its own framing says so) but the
+	// queries always target live sources, so the plan can only ever
+	// contribute evidence through the normal search/fetch/verify path. An
+	// empty value leaves the planner prompt byte-identical to the
+	// pre-memory behavior.
+	memoryHints string
 }
 
 // WithSeedQueries provides an explicit list of search queries, bypassing the
@@ -29,6 +38,18 @@ type callOptions struct {
 func WithSeedQueries(queries ...string) Option {
 	return func(o *callOptions) {
 		o.seedQueries = append(o.seedQueries, queries...)
+	}
+}
+
+// WithMemoryHints provides the rendered editorial-memory hint block for the
+// discovery call (issue #145). It is passed to the planner as optional
+// context — the block's own framing states that hints must never be reported
+// as fact — and is recorded on the resulting plan (SearchPlan.MemoryHints)
+// for provenance. An empty value disables the projection entirely, keeping
+// the planner prompt byte-identical to the pre-memory behavior.
+func WithMemoryHints(hints string) Option {
+	return func(o *callOptions) {
+		o.memoryHints = strings.TrimSpace(hints)
 	}
 }
 

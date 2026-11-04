@@ -135,12 +135,40 @@ func New(client Client, model string, config Config) (*Planner, error) {
 //  5. Deduplicate normalized duplicate queries
 //  6. Return the validated plan
 func (p *Planner) Generate(ctx context.Context, topic string, language string, timeRangeHint *TimeRangeHint) (*SearchPlan, error) {
+	return p.GenerateWithContext(ctx, topic, language, timeRangeHint, p.config.MemoryHints)
+}
+
+// GenerateMemory is the planner view consumed by the discovery service
+// (issue #145): it behaves like GenerateWithContext, records the projected
+// hint block on the returned plan (MemoryHints), and returns it. The hints
+// are context, never evidence; the plan's queries always target live
+// sources.
+func (p *Planner) GenerateMemory(ctx context.Context, topic string, language string, timeRangeHint *TimeRangeHint, hints string) (*SearchPlan, error) {
+	pn, err := p.GenerateWithContext(ctx, topic, language, timeRangeHint, hints)
+	if err != nil {
+		return nil, err
+	}
+	pn.MemoryHints = strings.TrimSpace(hints)
+	return pn, nil
+}
+
+// GenerateWithContext produces a validated SearchPlan like Generate, but with
+// explicit control over the memory-hint block appended to the prompt. Passing
+// "" (or using Generate, which uses the planner-configured hints) appends no
+// hint block. The hint block is context, never evidence: it may guide query
+// formulation (see the framing carried by the block itself) but the resulting
+// queries always target live sources, so the plan can only ever contribute
+// evidence through the normal search/fetch/verify path.
+func (p *Planner) GenerateWithContext(ctx context.Context, topic string, language string, timeRangeHint *TimeRangeHint, memoryHints string) (*SearchPlan, error) {
 	if strings.TrimSpace(topic) == "" {
 		return nil, ErrEmptyTopic
 	}
 
 	// Build the user prompt with topic and hints
 	userPrompt := buildUserPrompt(topic, language, timeRangeHint)
+	if strings.TrimSpace(memoryHints) != "" {
+		userPrompt += "\n" + memoryHints + "\n"
+	}
 
 	// Create the LLM request
 	req := Request{

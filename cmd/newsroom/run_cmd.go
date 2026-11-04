@@ -230,35 +230,39 @@ func buildRunOverrides(cmd *cobra.Command) map[string]config.Override {
 // value recorded in the run's manifest snapshot (see formatForResume), so a
 // format changed after the failure cannot reshape the run's artifact.
 type runResolved struct {
-	llmBaseURL       string
-	llmModel         string
-	llmAPIKey        string
-	llmTimeout       float64
-	searchBaseURL    string
-	searchLanguage   string
-	searchTimeRange  string
-	searchMaxQueries int
-	searchResults    int
-	maxSources       int
-	fetchTimeout     float64
-	fetchMaxSize     int
-	fetchMaxWords    int
-	archiveDB        string
-	archiveSet       bool
-	archiveTopK      int
-	profilesRoot     string
-	profilesName     string
-	profilesNameSet  bool
-	bundleRoot       string
-	publication      string
-	language         string
-	languageSource   string
-	temperature      float64
-	maxTokens        int
-	tone             string
-	format           string
-	formatSource     string
-	quality          float64
+	llmBaseURL        string
+	llmModel          string
+	llmAPIKey         string
+	llmTimeout        float64
+	searchBaseURL     string
+	searchLanguage    string
+	searchTimeRange   string
+	searchMaxQueries  int
+	searchResults     int
+	maxSources        int
+	fetchTimeout      float64
+	fetchMaxSize      int
+	fetchMaxWords     int
+	archiveDB         string
+	archiveSet        bool
+	archiveTopK       int
+	memoryEnabled     bool
+	memorySet         bool
+	memoryDBPath      string
+	memoryMaxEntities int
+	profilesRoot      string
+	profilesName      string
+	profilesNameSet   bool
+	bundleRoot        string
+	publication       string
+	language          string
+	languageSource    string
+	temperature       float64
+	maxTokens         int
+	tone              string
+	format            string
+	formatSource      string
+	quality           float64
 }
 
 // newLLMClient builds the shared OpenAI-compatible LLM client from the
@@ -312,6 +316,7 @@ func doRunResume(ctx context.Context, cmd *cobra.Command, id run.RunID) error {
 		return err
 	}
 	res, err := plan.Orch.ResumeID(ctx, id)
+	plan.Orch.CloseMemory()
 	if res != nil && res.Manifest != nil {
 		printRunSummary(plan.Store, res.Manifest)
 		writeReviewBundle(plan.Store, res.Manifest)
@@ -355,6 +360,7 @@ func doRunNew(ctx context.Context, cmd *cobra.Command) error {
 	fmt.Fprintf(os.Stderr, "creating run %s in workspace %q (%s)\n", plan.Manifest.ID, plan.Manifest.Workspace.Name, root)
 
 	res, err := plan.Orch.Run(ctx, plan.Manifest, false)
+	plan.Orch.CloseMemory()
 	if res == nil || res.Manifest == nil {
 		return fmt.Errorf("run %s: %w", plan.Manifest.ID, err)
 	}
@@ -422,6 +428,39 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 		MaxTitleLength:     1000,
 	}))
 
+	// Editorial memory (v0.7, issue #145): the memory is opt-in. When
+	// enabled, the orchestrator's MemoryService projects bounded hints from
+	// the memory database into the planner and researcher prompts; the
+	// final-check no-bypass guard (finalchecker) applies regardless, so a
+	// hinted value can never enter the artifact as a verified claim.
+	//
+	// A missing or unreadable database degrades to pre-memory behavior:
+	// the run continues without hints and a warning is recorded (the run's
+	// stage warning mechanism carries it through the manifest). The memory
+	// service is the single reader of the database for the run, so its
+	// Close (deferred by the caller) releases the SQLite handle.
+	if r.memoryDBPath == "" {
+		r.memoryDBPath = "./.newsroom/memory"
+	}
+	if r.memoryEnabled {
+		mc := orchestrator.MemoryConfig{
+			Enabled:     r.memoryEnabled,
+			DBPath:      r.memoryDBPath,
+			MaxEntities: r.memoryMaxEntities,
+		}
+		svc, err := orchestrator.NewMemoryService(ctx, mc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: editorial memory could not be opened (%s); continuing without memory hints\n", err.Error())
+		} else {
+			cfg.Memory = svc
+			cfg.MemoryClose = svc.Close
+		}
+	}
+
+	// The researcher's memory-hint block is projected per call (the
+	// orchestrator's research stage), not baked into the client config:
+	// this keeps a config-level MemoryHints empty so a bare Generate (e.g.
+	// from follow-up research) never carries hints silently.
 	cfg.Research, err = researcher.New(in.llm, r.llmModel, researcher.ClientConfig{
 		Temperature:     r.temperature,
 		MaxOutputTokens: r.maxTokens,
@@ -516,6 +555,34 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 			cfg.Extractor,
 			cfg.Research,
 		)
+	}
+
+	// Editorial memory (v0.7, issue #145): the memory is opt-in. When
+	// enabled, the orchestrator's MemoryService projects bounded hints from
+	// the memory database into the planner and researcher prompts; the
+	// final-check no-bypass guard (finalchecker) applies regardless, so a
+	// hinted value can never enter the artifact as a verified claim.
+	//
+	// A missing or unreadable database degrades to pre-memory behavior:
+	// the run continues without hints and a warning records the reason. The
+	// memory service is also the single reader of the database for the run,
+	// so its Close (deferred by the caller) releases the SQLite handle.
+	if r.memoryDBPath == "" {
+		r.memoryDBPath = "./.newsroom/memory"
+	}
+	mc := orchestrator.MemoryConfig{
+		Enabled:     r.memoryEnabled,
+		DBPath:      r.memoryDBPath,
+		MaxEntities: r.memoryMaxEntities,
+	}
+	if r.memoryEnabled {
+		svc, err := orchestrator.NewMemoryService(ctx, mc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: editorial memory could not be opened (%s); continuing without memory hints\n", err.Error())
+		} else {
+			cfg.Memory = svc
+			cfg.MemoryClose = svc.Close
+		}
 	}
 	return cfg, nil
 }

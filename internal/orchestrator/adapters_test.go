@@ -349,6 +349,12 @@ func (researchStub) Generate(_ context.Context, topic string, _ []types.Document
 	}, nil
 }
 
+// MemoryHints implements ResearchService (issue #145). The stub ignores the
+// hint block and returns the same canned dossier (pre-memory behavior).
+func (researchStub) MemoryHints(ctx context.Context, topic string, docs []types.Document, _ string) (*researcher.ResearchDossier, error) {
+	return researchStub{}.Generate(ctx, topic, docs)
+}
+
 // TestFollowUpServiceRun exercises the fully wired follow-up service (real
 // followup engine) on a dossier whose claims are all supported: the engine
 // has nothing to resolve and returns without new documents.

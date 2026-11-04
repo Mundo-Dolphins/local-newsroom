@@ -155,6 +155,12 @@ func (f *fakeResearch) Generate(_ context.Context, _ string, docs []types.Docume
 	return f.dossier, nil
 }
 
+// MemoryHints implements ResearchService (issue #145). The fake ignores the
+// hint block and returns the configured dossier (pre-memory behavior).
+func (f *fakeResearch) MemoryHints(_ context.Context, _ string, docs []types.Document, _ string) (*researcher.ResearchDossier, error) {
+	return f.Generate(context.Background(), "", docs)
+}
+
 type fakeArchive struct {
 	res   *archiverev.RetrieveResult
 	err   error
@@ -240,6 +246,10 @@ func (f *fakeCheck) Check(_ context.Context, artifact *contracts.EditorialArtifa
 		FactualFindings:         []contracts.FactualFinding{},
 	}, nil
 }
+
+// SetMemoryContext implements CheckService (issue #145). The fake accepts
+// the context but does nothing with it (pre-memory behavior).
+func (f *fakeCheck) SetMemoryContext(_ *MemoryContext) {}
 
 // =============================================================================
 // Fixtures and helpers

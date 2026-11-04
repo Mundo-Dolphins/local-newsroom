@@ -72,6 +72,12 @@ func (p *countingPlanner) Generate(ctx context.Context, topic string, language s
 	return p.plan, nil
 }
 
+// GenerateMemory implements the discovery Planner interface (issue #145).
+// The counting planner behaves like Generate (pre-memory: no hints).
+func (p *countingPlanner) GenerateMemory(ctx context.Context, topic string, language string, hint *planner.TimeRangeHint, _ string) (*planner.SearchPlan, error) {
+	return p.Generate(ctx, topic, language, hint)
+}
+
 func TestDiscoverWithSeedQueriesBypassesPlanner(t *testing.T) {
 	plan := &planner.SearchPlan{
 		OriginalTopic: "planner topic",

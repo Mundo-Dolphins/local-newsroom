@@ -43,6 +43,12 @@ type DiscoveryResult struct {
 	// FailedQueryCount is the number of queries that failed completely.
 	FailedQueryCount int
 
+	// MemoryHints is the rendered editorial-memory hint block projected into
+	// the planner prompt for this discovery (issue #145). It is provenance:
+	// context, never evidence — it may have guided query formulation, but it
+	// is never consumed as evidence by any stage. Empty = no memory influence.
+	MemoryHints string `json:"memory_hints,omitempty"`
+
 	// SuccessfulQueryCount is the number of queries that produced usable results.
 	SuccessfulQueryCount int
 }

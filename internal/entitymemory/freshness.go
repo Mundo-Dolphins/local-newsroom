@@ -35,6 +35,16 @@ type AttributeFreshness struct {
 	// LastVerifiedAt is when the attribute was last verified (zero = never
 	// verified; such attributes are always stale).
 	LastVerifiedAt time.Time
+
+	// EntityName is the owning entity's canonical name. It is set by the
+	// hint projection (BuildPromptBlock) so renderers can prefix attribute
+	// lines with the entity; it is empty when the freshness was produced
+	// outside a block (e.g. AttributeFreshnesses) and renderers then fall
+	// back to the key alone.
+	//
+	// EntityName is presentation metadata, not part of any contract
+	// validation.
+	EntityName string
 }
 
 // ReVerify reports whether the attribute must be re-verified before its

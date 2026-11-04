@@ -61,10 +61,12 @@ func (o *Orchestrator) discoverRecipeRun(ctx context.Context, topic, language st
 	return o.cfg.Discovery.Discover(ctx, topic, language, o.recipeTimeRangeHint(), opts...)
 }
 
-// defaultDiscoverRun is the discovery call for standard runs (byte-identical
-// pre-recipe behavior: no options, no time hint from a recipe).
-func (o *Orchestrator) defaultDiscoverRun(ctx context.Context, topic, language string) (*discovery.DiscoveryResult, error) {
-	return o.cfg.Discovery.Discover(ctx, topic, language, nil)
+// defaultDiscoverRun is the discovery call for standard runs. opts are
+// optional call customizations (currently: the editorial-memory hint block,
+// issue #145); with no options the call is byte-identical to the pre-memory
+// behavior.
+func (o *Orchestrator) defaultDiscoverRun(ctx context.Context, topic, language string, opts ...discovery.Option) (*discovery.DiscoveryResult, error) {
+	return o.cfg.Discovery.Discover(ctx, topic, language, nil, opts...)
 }
 
 // discoveryRecipeOptions derives discovery options from the recipe's source

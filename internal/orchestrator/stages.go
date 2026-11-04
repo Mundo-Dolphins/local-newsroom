@@ -57,6 +57,16 @@ type sourcesIndex struct {
 	Candidates   []discovery.Candidate `json:"candidates,omitempty"`
 	Selected     []string              `json:"selected"`
 	SelectedAt   time.Time             `json:"selected_at"`
+
+	// MemoryHints carries the rendered editorial-memory hint block projected
+	// for the planner/discovery stage (issue #145). It is context, never
+	// evidence, and is persisted here so a resumed run sees the same block
+	// the original planner saw. Empty = no memory influence.
+	MemoryHints string `json:"memory_hints,omitempty"`
+
+	// MemoryEntityIDs lists the memory entity IDs behind MemoryHints
+	// (provenance bookkeeping; empty = no matched entities).
+	MemoryEntityIDs []string `json:"memory_entity_ids,omitempty"`
 }
 
 // fetchIndex records the outcome of every attempted URL retrieval.
@@ -82,6 +92,16 @@ type researchIndex struct {
 	FromArchive int      `json:"from_archive"`
 	ClaimIDs    []string `json:"claim_ids"`
 	SourceIDs   []string `json:"source_ids"`
+
+	// MemoryHints carries the rendered editorial-memory hint block projected
+	// for the researcher (issue #145). It is context, never evidence: it
+	// guides entity recognition and angles, and it must never be quoted, cited,
+	// or reported as fact. Persisted here for provenance and resume parity.
+	MemoryHints string `json:"memory_hints,omitempty"`
+
+	// MemoryEntityIDs lists the memory entity IDs behind MemoryHints
+	// (provenance bookkeeping; empty = no matched entities).
+	MemoryEntityIDs []string `json:"memory_entity_ids,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -199,15 +219,47 @@ func (o *Orchestrator) runDiscovery(ctx context.Context, in *runner.StageInput) 
 		if o.cfg.Discovery == nil {
 			return nil, errors.New("discovery: source mode requires discovery, but no Discovery service is configured (pass --url flags or configure search)")
 		}
+
+		// Editorial-memory projection (issue #145): the hint block and the
+		// matched entities are recorded on the index now, before the
+		// discovery call, so a failed discovery still persists the provenance
+		// and the run degrades to pre-memory behavior on resume. A projection
+		// failure never fails the stage: hints are optional context.
+		if o.cfg.Memory != nil {
+			hints, ids, err := o.cfg.Memory.PlannerHints(ctx, in.Manifest.Topic)
+			if err != nil {
+				out.Warnings = append(out.Warnings, runner.Warning{
+					Code:    "memory.unavailable",
+					Message: "memory hint projection failed; continuing without memory hints: " + err.Error(),
+				})
+			} else if strings.TrimSpace(hints) != "" {
+				idx.MemoryHints = hints
+				idx.MemoryEntityIDs = ids
+			}
+		}
 		var res *discovery.DiscoveryResult
 		var err error
+		// The memory hint block is passed into the discovery call so the
+		// planner (when one is used) sees it and the result carries it for
+		// provenance. Recipe seed queries still bypass the LLM planner
+		// (deterministic discovery), but the block is recorded regardless.
+		var hintOpts []discovery.Option
+		if h := strings.TrimSpace(idx.MemoryHints); h != "" {
+			hintOpts = []discovery.Option{discovery.WithMemoryHints(h)}
+		}
 		if o.hasRecipe() {
-			res, err = o.discoverRecipeRun(ctx, in.Manifest.Topic, idx.Language, o.discoveryRecipeOptions())
+			hintOpts = append(hintOpts, o.discoveryRecipeOptions()...)
+			res, err = o.discoverRecipeRun(ctx, in.Manifest.Topic, idx.Language, hintOpts)
 		} else {
-			res, err = o.defaultDiscoverRun(ctx, in.Manifest.Topic, idx.Language)
+			res, err = o.defaultDiscoverRun(ctx, in.Manifest.Topic, idx.Language, hintOpts...)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("discovery: %w", err)
+		}
+		// Prefer the block the planner actually received (it is the same text
+		// for a non-seed plan; for seed plans it is the recorded block).
+		if h := strings.TrimSpace(res.MemoryHints); h != "" {
+			idx.MemoryHints = h
 		}
 		for _, d := range res.Diagnostics {
 			if d.Level == discovery.DiagnosticLevelWarning || d.Level == discovery.DiagnosticLevelError {
@@ -399,6 +451,31 @@ func (o *Orchestrator) runResearch(ctx context.Context, in *runner.StageInput) (
 	out := &runner.StageOutput{}
 	ri := researchIndex{Documents: len(docs)}
 
+	// Editorial-memory projection (issue #145): the hint block and matched
+	// entities are recorded on the index now (before the research call) so a
+	// failed or resumed research stage sees the exact same block the original
+	// researcher saw. A projection failure never fails the stage: hints are
+	// optional context, never a dependency of the research pipeline.
+	var memoryHints string
+	if o.cfg.Memory != nil {
+		hints, ids, err := o.cfg.Memory.ResearcherHints(ctx, in.Manifest.Topic)
+		if err != nil {
+			out.Warnings = append(out.Warnings, runner.Warning{
+				Code:    "memory.unavailable",
+				Message: "memory hint projection failed; continuing without memory hints: " + err.Error(),
+			})
+		} else if strings.TrimSpace(hints) != "" {
+			memoryHints = hints
+			ri.MemoryHints = hints
+			ri.MemoryEntityIDs = ids
+		}
+		// Persist the index immediately so the provenance survives even when
+		// the research call itself fails.
+		if f, err := o.stageFile(run.ArtifactKindCustom, researchIndexPath, ri); err == nil {
+			out.Files = append(out.Files, f)
+		}
+	}
+
 	// Optional archive augmentation: a failed or empty retrieval never
 	// fails the run (live sources carry the research).
 	if o.cfg.Archive != nil && o.archiveEnabledForRun(in) {
@@ -426,9 +503,23 @@ func (o *Orchestrator) runResearch(ctx context.Context, in *runner.StageInput) (
 		}
 	}
 
-	dossier, err := o.cfg.Research.Generate(ctx, in.Manifest.Topic, docs)
-	if err != nil {
-		return nil, fmt.Errorf("research: %w", err)
+	var dossier *researcher.ResearchDossier
+	if strings.TrimSpace(memoryHints) != "" {
+		// The memory hint block is projected into the prompt (context, never
+		// evidence — the prompt framing enforces the no-bypass rule) and the
+		// matched entity IDs are recorded on the dossier for provenance.
+		dossier, err = o.cfg.Research.MemoryHints(ctx, in.Manifest.Topic, docs, memoryHints)
+		if err != nil {
+			return nil, fmt.Errorf("research: %w", err)
+		}
+		if len(ri.MemoryEntityIDs) > 0 {
+			dossier.MemoryHintIDs = append([]string(nil), ri.MemoryEntityIDs...)
+		}
+	} else {
+		dossier, err = o.cfg.Research.Generate(ctx, in.Manifest.Topic, docs)
+		if err != nil {
+			return nil, fmt.Errorf("research: %w", err)
+		}
 	}
 	ri.ClaimIDs = claimIDs(dossier.Claims)
 	ri.SourceIDs = make([]string, len(dossier.Sources))
@@ -441,6 +532,8 @@ func (o *Orchestrator) runResearch(ctx context.Context, in *runner.StageInput) (
 		return nil, err
 	}
 	out.Files = append(out.Files, f)
+	// The index was persisted earlier when memory hints were projected; the
+	// updated index (claims/sources plus the provenance fields) replaces it.
 	f, err = o.stageFile(run.ArtifactKindCustom, researchIndexPath, ri)
 	if err != nil {
 		return nil, err
@@ -615,6 +708,7 @@ func (o *Orchestrator) runFinalCheck(ctx context.Context, in *runner.StageInput)
 	if o.cfg.Check == nil {
 		return nil, errors.New("final_check: no Check service is configured")
 	}
+	out := &runner.StageOutput{}
 	artifact, err := loadStageJSON[contracts.EditorialArtifact](in, artifactPath)
 	if err != nil {
 		return nil, fmt.Errorf("final_check: %w", err)
@@ -623,6 +717,35 @@ func (o *Orchestrator) runFinalCheck(ctx context.Context, in *runner.StageInput)
 	if err != nil {
 		return nil, fmt.Errorf("final_check: %w", err)
 	}
+
+	// Editorial-memory no-bypass check (v0.7, issue #145): install the run's
+	// memory provenance on the checker before it runs, so its deterministic
+	// memory-provenance check can fail the run when a verified claim was
+	// satisfied by memory alone. The context is built from the research
+	// index the run persisted (its MemoryEntityIDs) plus the memory store;
+	// a run that projected no hints (or has no memory service) gets a nil
+	// context and the check is a no-op — pre-memory behavior.
+	if o.cfg.Memory != nil {
+		if ri, err := loadStageJSON[researchIndex](in, researchIndexPath); err == nil && len(ri.MemoryEntityIDs) > 0 {
+			entities, err := o.cfg.Memory.Entities(ctx, ri.MemoryEntityIDs)
+			if err != nil {
+				// The check degrades to a provenance-only no-op rather than
+				// failing the run: a missing entity record is a data problem,
+				// not a factual one. The other checks still apply.
+				out.Warnings = append(out.Warnings, runner.Warning{
+					Code:    "memory.unavailable",
+					Message: "could not load memory entities for the no-bypass check; skipping: " + err.Error(),
+				})
+			} else {
+				o.cfg.Check.SetMemoryContext(&MemoryContext{Entities: entities})
+			}
+		} else {
+			o.cfg.Check.SetMemoryContext(nil)
+		}
+	} else {
+		o.cfg.Check.SetMemoryContext(nil)
+	}
+
 	result, err := o.cfg.Check.Check(ctx, artifact, vres)
 	if err != nil {
 		return nil, fmt.Errorf("final_check: %w", err)
@@ -663,7 +786,7 @@ func (o *Orchestrator) runFinalCheck(ctx context.Context, in *runner.StageInput)
 	if err := in.Manifest.AddArtifact(ref); err != nil {
 		return nil, fmt.Errorf("final_check: recording result: %w", err)
 	}
-	return &runner.StageOutput{}, nil
+	return out, nil
 }
 
 // runRender renders the final output. It refuses to run unless the persisted

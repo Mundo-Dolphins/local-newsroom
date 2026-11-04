@@ -61,6 +61,23 @@ type ResearchDossier struct {
 
 	// ResearchNotes contains non-publishable internal notes and observations.
 	ResearchNotes []ResearchNote `json:"research_notes,omitempty"`
+
+	// MemoryHintIDs lists the editorial-memory entity IDs whose hints
+	// influenced this dossier's generation (issue #145).
+	//
+	// This is provenance bookkeeping only: it records that memory was
+	// consulted as context (entity names, aliases, attribute keys) so the
+	// run manifest and any audit can trace which memories shaped the
+	// research. It is NOT evidence: no memory ID in this list confers any
+	// status on a claim — claims still earn their verification exclusively
+	// through their documented Sources and the Verifier. The final factual
+	// checker cross-references this field with the verification result to
+	// enforce the no-bypass invariant deterministically (a claim that
+	// merely restates a memory hint must still be backed by live-source
+	// evidence). An empty list means memory contributed nothing (no matched
+	// entities, or memory disabled) — every other field is then
+	// byte-identical to a pre-memory run.
+	MemoryHintIDs []string `json:"memory_hint_ids,omitempty"`
 }
 
 // Validate performs structural validation on the ResearchDossier.

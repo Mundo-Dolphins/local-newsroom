@@ -51,6 +51,9 @@ const (
 	SettingProfilesName         = "profiles.name"
 	SettingEditorialBundle      = "editorial.bundle_root"
 	SettingEditorialPublication = "editorial.publication"
+	SettingMemoryEnabled        = "memory.enabled"
+	SettingMemoryDBPath         = "memory.db_path"
+	SettingMemoryMaxEntities    = "memory.max_entities"
 	SettingDefaultsLanguage     = "defaults.language"
 	SettingOutputFormat         = "defaults.output_format"
 	SettingTemperature          = "defaults.temperature"
@@ -458,6 +461,34 @@ var Settings = []Setting{
 		kind:     kindString,
 		validate: validatePublicationName,
 		file:     func(f File) (string, bool) { return str(f.Editorial.Publication) },
+	},
+	{
+		// Built-in default is intentionally unset (""): memory hints are
+		// enabled only when the operator turns them on. A run over a missing
+		// or unreadable memory database proceeds without hints (degraded, not
+		// failed) — hints are optional context, never a dependency.
+		Name:     SettingMemoryEnabled,
+		EnvVar:   "NEWSROOM_MEMORY_ENABLED",
+		kind:     kindBool,
+		validate: validateBool,
+		file:     func(f File) (string, bool) { return bstr(f.Memory.Enabled) },
+	},
+	{
+		// Built-in default is intentionally unset (""): consumers fall back
+		// to the memory package's default root ("./.newsroom/memory").
+		Name:     SettingMemoryDBPath,
+		EnvVar:   "NEWSROOM_MEMORY_DB",
+		kind:     kindString,
+		validate: validateAny,
+		file:     func(f File) (string, bool) { return str(f.Memory.DBPath) },
+	},
+	{
+		Name:     SettingMemoryMaxEntities,
+		EnvVar:   "NEWSROOM_MEMORY_MAX_ENTITIES",
+		Default:  "10",
+		kind:     kindInt,
+		validate: validateIntRange(1, 10),
+		file:     func(f File) (string, bool) { return inum(f.Memory.MaxEntities) },
 	},
 	{
 		Name:     SettingDefaultsLanguage,
