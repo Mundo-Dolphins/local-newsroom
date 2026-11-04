@@ -120,12 +120,6 @@ type runFlags struct {
 	archiveDB   string
 	archiveTopK int
 
-	// Memory configuration (v0.7).
-	memoryEnabled   bool
-	memorySet       bool
-	memoryDBPath    string
-	memoryMaxEntities int
-
 	// Generation parameters.
 	language    string
 	temperature float64
@@ -236,39 +230,39 @@ func buildRunOverrides(cmd *cobra.Command) map[string]config.Override {
 // value recorded in the run's manifest snapshot (see formatForResume), so a
 // format changed after the failure cannot reshape the run's artifact.
 type runResolved struct {
-	llmBaseURL       string
-	llmModel         string
-	llmAPIKey        string
-	llmTimeout       float64
-	searchBaseURL    string
-	searchLanguage   string
-	searchTimeRange  string
-	searchMaxQueries int
-	searchResults    int
-	maxSources       int
-	fetchTimeout     float64
-	fetchMaxSize     int
-	fetchMaxWords    int
-	archiveDB        string
-	archiveSet       bool
-	archiveTopK      int
-	memoryEnabled    bool
-	memorySet        bool
-	memoryDBPath     string
+	llmBaseURL        string
+	llmModel          string
+	llmAPIKey         string
+	llmTimeout        float64
+	searchBaseURL     string
+	searchLanguage    string
+	searchTimeRange   string
+	searchMaxQueries  int
+	searchResults     int
+	maxSources        int
+	fetchTimeout      float64
+	fetchMaxSize      int
+	fetchMaxWords     int
+	archiveDB         string
+	archiveSet        bool
+	archiveTopK       int
+	memoryEnabled     bool
+	memorySet         bool
+	memoryDBPath      string
 	memoryMaxEntities int
-	profilesRoot     string
-	profilesName     string
-	profilesNameSet  bool
-	bundleRoot       string
-	publication      string
-	language         string
-	languageSource   string
-	temperature      float64
-	maxTokens        int
-	tone             string
-	format           string
-	formatSource     string
-	quality          float64
+	profilesRoot      string
+	profilesName      string
+	profilesNameSet   bool
+	bundleRoot        string
+	publication       string
+	language          string
+	languageSource    string
+	temperature       float64
+	maxTokens         int
+	tone              string
+	format            string
+	formatSource      string
+	quality           float64
 }
 
 // newLLMClient builds the shared OpenAI-compatible LLM client from the
@@ -445,6 +439,9 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 	// stage warning mechanism carries it through the manifest). The memory
 	// service is the single reader of the database for the run, so its
 	// Close (deferred by the caller) releases the SQLite handle.
+	if r.memoryDBPath == "" {
+		r.memoryDBPath = "./.newsroom/memory"
+	}
 	if r.memoryEnabled {
 		mc := orchestrator.MemoryConfig{
 			Enabled:     r.memoryEnabled,
@@ -570,6 +567,9 @@ func buildRunServices(ctx context.Context, cfg orchestrator.Config, in serviceIn
 	// the run continues without hints and a warning records the reason. The
 	// memory service is also the single reader of the database for the run,
 	// so its Close (deferred by the caller) releases the SQLite handle.
+	if r.memoryDBPath == "" {
+		r.memoryDBPath = "./.newsroom/memory"
+	}
 	mc := orchestrator.MemoryConfig{
 		Enabled:     r.memoryEnabled,
 		DBPath:      r.memoryDBPath,

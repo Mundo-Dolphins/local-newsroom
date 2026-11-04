@@ -218,5 +218,3 @@ func (s *storeMemoryService) Entities(ctx context.Context, ids []string) ([]enti
 func (s *storeMemoryService) Close() error {
 	return s.store.Store().Close()
 }
-
-

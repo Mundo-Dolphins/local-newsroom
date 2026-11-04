@@ -144,7 +144,7 @@ func (m *MemoryBypassChecker) CheckMemoryProvenance(ctx context.Context, artifac
 		}
 		for _, entity := range m.MemoryContext.Entities {
 			if match, value := entityMatchesClaim(entity, details); match {
-				bypassFindings = append(bypassFindings, m.findings(claimID, entity, value)...) 
+				bypassFindings = append(bypassFindings, m.findings(claimID, entity, value)...)
 				break // one finding per claim is enough
 			}
 		}
@@ -160,13 +160,13 @@ func (m *MemoryBypassChecker) CheckMemoryProvenance(ctx context.Context, artifac
 func (m *MemoryBypassChecker) findings(claimID string, entity entitymemory.Entity, matchedValue string) []contracts.FactualFinding {
 	_ = m
 	return []contracts.FactualFinding{{
-		FindingID:         "memory-bypass-" + claimID,
-		FindingType:       contracts.FindingTypeError,
-		Statement:         "Claim " + claimID + " matches editorial memory entity " + entity.ID + " (\"" + entity.CanonicalName + "\") value " + quote(matchedValue) + " but has no live-source evidence in the verification result. Memory is context, never evidence: the claim cannot be verified by a memory hint.",
-		Evidence:          "memory entity " + entity.ID + " carried this value; the verification result records no supporting live-source evidence for the claim",
-		Severity:          contracts.WarningSeverityCritical,
-		Category:          contracts.FindingCategoryEvidence,
-		RelatedClaimIDs:   []string{claimID},
+		FindingID:       "memory-bypass-" + claimID,
+		FindingType:     contracts.FindingTypeError,
+		Statement:       "Claim " + claimID + " matches editorial memory entity " + entity.ID + " (\"" + entity.CanonicalName + "\") value " + quote(matchedValue) + " but has no live-source evidence in the verification result. Memory is context, never evidence: the claim cannot be verified by a memory hint.",
+		Evidence:        "memory entity " + entity.ID + " carried this value; the verification result records no supporting live-source evidence for the claim",
+		Severity:        contracts.WarningSeverityCritical,
+		Category:        contracts.FindingCategoryEvidence,
+		RelatedClaimIDs: []string{claimID},
 	}}
 }
 
@@ -247,8 +247,7 @@ func tokenize(s string) []string {
 	fields := strings.Fields(s)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		f = strings.Trim(f, `"'.,;:!?()[]{}"`)
-		f = strings.Trim(f, `"'.,;:!?()[]{}"`)
+		f = strings.Trim(f, `"'.,;:!?()[]{} `)
 		if len(f) < 3 {
 			continue
 		}

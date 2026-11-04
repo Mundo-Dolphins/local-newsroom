@@ -37,7 +37,6 @@ func seedHintStoreAt(t *testing.T, ref time.Time, entities ...*Entity) *Store {
 	return s.WithNow(ref)
 }
 
-
 // TestBuildPromptBlockNoEntities verifies the block is empty when no entity
 // matches the mentions.
 func TestBuildPromptBlockNoEntities(t *testing.T) {
@@ -87,7 +86,7 @@ func TestRenderPlannerHintsNoValues(t *testing.T) {
 		Type:          TypeTeam,
 		Confidence:    memory.ConfidenceMedium,
 		Attributes: []Attribute{
-			{Key: "manager", Value: "Xabi Alonso", Volatility: memory.VolatileHigh, StaleAfter: 24*time.Hour, LastVerifiedAt: old},
+			{Key: "manager", Value: "Xabi Alonso", Volatility: memory.VolatileHigh, StaleAfter: 24 * time.Hour, LastVerifiedAt: old},
 		},
 	})
 	// Use the same reference time the entity was created with so staleness
@@ -112,7 +111,7 @@ func TestRenderResearcherHintsStaleValues(t *testing.T) {
 		Type:          TypeTeam,
 		Confidence:    memory.ConfidenceMedium,
 		Attributes: []Attribute{
-			{Key: "manager", Value: "Xabi Alonso", Volatility: memory.VolatileHigh, StaleAfter: 24*time.Hour, LastVerifiedAt: old},
+			{Key: "manager", Value: "Xabi Alonso", Volatility: memory.VolatileHigh, StaleAfter: 24 * time.Hour, LastVerifiedAt: old},
 		},
 	})
 	out := s.WithNow(ref).RenderResearcherHints([]Mention{{Text: "Bayern Munich"}}, ref, DefaultBound)
@@ -196,7 +195,6 @@ func TestResolveMentionsDedup(t *testing.T) {
 		t.Errorf("expected [player-kane], got %v", ids)
 	}
 }
-
 
 // ProjectTopicMentions derives the mention set for a topic: the topic itself
 // plus the longest words (>= 3 chars), capped at 8 total. It is the public

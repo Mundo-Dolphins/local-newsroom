@@ -27,12 +27,10 @@ import (
 // fixed by the projection: a caller cannot request more entities than the
 // budget allows (requesting fewer is allowed and clamps the block down).
 type HintBudget struct {
-	// MaxEntities caps the number of matched entities rendered.
+	// MaxEntities caps the number of matched entities rendered (0 or
+	// negative uses DefaultBound; bounds above it are clamped by the
+	// builder).
 	MaxEntities int
-
-	// ReVerifyOnly limits the attribute projection to stale/expired
-	// attributes (see PromptBlock.ReVerify). Identity lines always render.
-	ReVerifyOnly bool
 }
 
 // DefaultBound bounds the number of entities rendered into a prompt block.
@@ -45,18 +43,9 @@ const DefaultBound = 10
 const AliasLimit = 5
 
 // DefaultHintBudget is the projection budget used when none is supplied.
+// DefaultHintBudget is the out-of-the-box projection budget.
 var DefaultHintBudget = HintBudget{
-	MaxEntities:  DefaultBound,
-	ReVerifyOnly: true,
-}
-
-// clamp narrows the budget; it never widens it beyond DefaultHintBudget.
-func (b HintBudget) clamp() HintBudget {
-	if b.MaxEntities <= 0 || b.MaxEntities > DefaultHintBudget.MaxEntities {
-		b.MaxEntities = DefaultHintBudget.MaxEntities
-	}
-	b.ReVerifyOnly = true // values are only ever surfaced via ReVerify
-	return b
+	MaxEntities: DefaultBound,
 }
 
 // PromptBlock is the bounded, render-ready view of the entity memory for one

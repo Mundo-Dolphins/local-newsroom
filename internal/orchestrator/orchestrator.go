@@ -219,8 +219,6 @@ type MemoryContext struct {
 	Entities []entitymemory.Entity
 }
 
-
-
 // MarkdownRenderer renders an artifact as a Markdown document. Satisfied by
 // *renderers.MarkdownRenderer.
 type MarkdownRenderer interface {

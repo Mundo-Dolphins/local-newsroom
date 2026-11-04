@@ -86,7 +86,7 @@ type documentsIndex struct {
 	Paths     []string `json:"paths"`
 }
 
-	// researchIndex records what the research stage synthesized from.
+// researchIndex records what the research stage synthesized from.
 type researchIndex struct {
 	Documents   int      `json:"documents"`
 	FromArchive int      `json:"from_archive"`
@@ -300,17 +300,6 @@ func (o *Orchestrator) runDiscovery(ctx context.Context, in *runner.StageInput) 
 	}
 	out.Files = append(out.Files, f)
 	return out, nil
-}
-
-// memoryHintsFromIndex returns the memory hint block persisted by the
-// discovery stage ("" when the run projected none). The hints were rendered
-// at discovery time from the run's topic, so they are the exact same block
-// for the whole run, resume included.
-func memoryHintsFromIndex(idx *sourcesIndex) string {
-	if idx == nil {
-		return ""
-	}
-	return idx.MemoryHints
 }
 
 // selectCandidateURLs picks source URLs from the ranked discovery candidates:

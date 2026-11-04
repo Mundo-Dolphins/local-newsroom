@@ -262,7 +262,7 @@ type MemorySection struct {
 // A value here overrides every stage's built-in default (but never an
 // explicit CLI flag or environment variable), e.g. `temperature: 0.5` is
 // used by write, verify, final-check, and research alike.
-type DefaultsSection struct {	// Language is the output language (e.g. "en", "es").
+type DefaultsSection struct { // Language is the output language (e.g. "en", "es").
 	Language *string `yaml:"language"`
 	// OutputFormat is the default write format ("article", "thread", "hybrid").
 	OutputFormat *string `yaml:"output_format"`
