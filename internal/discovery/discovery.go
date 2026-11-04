@@ -69,6 +69,13 @@ type Planner interface {
 	//   - *planner.SearchPlan: The validated search plan
 	//   - error: If generation or validation fails
 	Generate(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint) (*planner.SearchPlan, error)
+
+	// GenerateMemory produces a plan like Generate but with an optional
+	// editorial-memory hint block projected into the planner prompt (issue
+	// #145). The hints are context, never evidence: they may guide query
+	// formulation but the queries always target live sources. An empty
+	// hints argument behaves exactly like Generate.
+	GenerateMemory(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint, hints string) (*planner.SearchPlan, error)
 }
 
 // Discovery orchestrates source discovery from a research topic.
@@ -165,15 +172,17 @@ func (d *Discovery) Discover(ctx context.Context, topic string, language string,
 		opt(co)
 	}
 
-	// Step 1: Generate search plan — either via the planner, or directly
-	// from the recipe's seed queries (a deterministic replacement: the
-	// queries are still bounded by the configured query budget).
+	// Step 1: Generate search plan — either via the planner (with the
+	// optional memory-hint projection), or directly from the recipe's seed
+	// queries (a deterministic replacement: the queries are still bounded by
+	// the configured query budget).
 	var plan *planner.SearchPlan
 	if len(co.seedQueries) > 0 {
 		plan = seedPlan(topic, language, timeRangeHint, co.seedQueries, d.config.MaxSearchQueries)
+		plan.MemoryHints = co.memoryHints // provenance only (no planner involved)
 	} else {
 		var err error
-		plan, err = d.planner.Generate(ctx, topic, language, timeRangeHint)
+		plan, err = d.planner.GenerateMemory(ctx, topic, language, timeRangeHint, co.memoryHints)
 		if err != nil {
 			return nil, &DiscoveryError{
 				Code:    "planner_failed",
@@ -287,6 +296,7 @@ func (d *Discovery) Discover(ctx context.Context, topic string, language string,
 		TotalCandidatesReturned: len(candidates),
 		FailedQueryCount:        failedCount,
 		SuccessfulQueryCount:    successfulCount,
+		MemoryHints:             plan.MemoryHints,
 	}, nil
 }
 

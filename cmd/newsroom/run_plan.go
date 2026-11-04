@@ -438,6 +438,9 @@ func resolveRunConfigOverrides(ovs map[string]config.Override) (*runResolved, er
 	resolveFloat := func(name string) (float64, bool, error) {
 		return appConfig.GetFloat(name, ov(name))
 	}
+	resolveBool := func(name string) (bool, bool, error) {
+		return appConfig.GetBool(name, ov(name))
+	}
 
 	r := &runResolved{}
 	var err error
@@ -489,6 +492,23 @@ func resolveRunConfigOverrides(ovs map[string]config.Override) (*runResolved, er
 		return nil, err
 	}
 	if r.archiveTopK, _, err = resolveInt(config.SettingArchiveTopK); err != nil {
+		return nil, err
+	}
+
+	// Memory (v0.7): the memory is opt-in (default off). The enabled flag's
+	// "set-ness" is tracked the same way as archive so the run can carry a
+	// warning when the user explicitly disabled it; the database path and
+	// the per-prompt entity bound default sensibly when unset.
+	memoryEnabled, memorySet, err := resolveBool(config.SettingMemoryEnabled)
+	if err != nil {
+		return nil, err
+	}
+	r.memoryEnabled = memoryEnabled
+	r.memorySet = memorySet
+	if r.memoryDBPath, _, err = resolve(config.SettingMemoryDBPath); err != nil {
+		return nil, err
+	}
+	if r.memoryMaxEntities, _, err = resolveInt(config.SettingMemoryMaxEntities); err != nil {
 		return nil, err
 	}
 

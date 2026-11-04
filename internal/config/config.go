@@ -106,6 +106,9 @@ type File struct {
 	// Editorial configures the external editorial bundle (a local directory
 	// with publication presets and optionally editorial profile content).
 	Editorial EditorialSection `yaml:"editorial"`
+	// Memory configures the editorial-memory hint projection consumed by
+	// the planner and researcher (issue #145).
+	Memory MemorySection `yaml:"memory"`
 	// Defaults holds global fallbacks for generation parameters shared by
 	// the write, verify, final-check, and research stages.
 	Defaults DefaultsSection `yaml:"defaults"`
@@ -230,13 +233,36 @@ type EditorialSection struct {
 	Publication *string `yaml:"publication"`
 }
 
+// MemorySection configures the editorial-memory hint projection consumed by
+// the planner and researcher (issue #145).
+//
+// The memory is read-only context for the research pipeline: it contributes
+// hints (aliases, background, known sources) to the stage prompts and is
+// recorded in the run manifest. It is never evidence — claims must still be
+// verified against live sources through the normal pipeline.
+type MemorySection struct {
+	// Enabled turns the hint projection on. Default: off.
+	//
+	// When enabled and the memory database cannot be opened or read, the run
+	// proceeds without hints (degraded, not failed): hints are optional
+	// context, never a dependency of the research pipeline.
+	Enabled *bool `yaml:"enabled"`
+
+	// DBPath is the memory database path (or its root directory). Default:
+	// the memory package's default root ("./.newsroom/memory").
+	DBPath *string `yaml:"db_path"`
+
+	// MaxEntities bounds the number of matched entities rendered into a
+	// stage prompt (1-10; default 10). The budget only narrows.
+	MaxEntities *int `yaml:"max_entities"`
+}
+
 // DefaultsSection holds global fallbacks for generation parameters.
 //
 // A value here overrides every stage's built-in default (but never an
 // explicit CLI flag or environment variable), e.g. `temperature: 0.5` is
 // used by write, verify, final-check, and research alike.
-type DefaultsSection struct {
-	// Language is the output language (e.g. "en", "es").
+type DefaultsSection struct {	// Language is the output language (e.g. "en", "es").
 	Language *string `yaml:"language"`
 	// OutputFormat is the default write format ("article", "thread", "hybrid").
 	OutputFormat *string `yaml:"output_format"`

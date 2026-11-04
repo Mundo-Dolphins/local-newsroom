@@ -47,6 +47,15 @@ func (f *fakePlanner) Generate(ctx context.Context, topic string, language strin
 	return f.searchPlan, nil
 }
 
+// GenerateMemory implements the discovery Planner interface (issue #145).
+// The fake planner returns the same plan (pre-memory behavior: no hints).
+func (f *fakePlanner) GenerateMemory(ctx context.Context, topic string, language string, timeRangeHint *planner.TimeRangeHint, hints string) (*planner.SearchPlan, error) {
+	if f.shouldError {
+		return nil, errors.New(f.errorMessage)
+	}
+	return f.searchPlan, nil
+}
+
 // fakeSearchProvider implements search.Provider for testing.
 type fakeSearchProvider struct {
 	results   []search.Response

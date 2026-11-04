@@ -34,6 +34,7 @@ import (
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/contracts"
 	"github.com/Mundo-Dolphins/local-newsroom/internal/llm"
+	"github.com/Mundo-Dolphins/local-newsroom/internal/orchestrator"
 )
 
 //go:embed prompts/*.prompt
@@ -51,6 +52,11 @@ type FinalFactualChecker struct {
 	model  string
 	config CheckerConfig
 	prompt string
+
+	// memoryBypass is the deterministic no-bypass guard (v0.7, issue #145).
+	// It is always constructed (New) but is a no-op until SetMemoryContext
+	// installs a non-empty run context, so a pre-memory run is unaffected.
+	memoryBypass *MemoryBypassChecker
 }
 
 // CheckerConfig holds configuration for the FinalFactualChecker.
@@ -114,11 +120,21 @@ func New(client llm.Client, model string, config CheckerConfig) (*FinalFactualCh
 	}
 
 	return &FinalFactualChecker{
-		client: client,
-		model:  model,
-		config: config,
-		prompt: prompt,
+		client:       client,
+		model:        model,
+		config:       config,
+		prompt:       prompt,
+		memoryBypass: NewMemoryBypassChecker(),
 	}, nil
+}
+
+// SetMemoryContext installs the run's editorial-memory provenance for the
+// next Check call (v0.7, issue #145). It enables the deterministic
+// no-bypass check: a verified claim that matches a memory entity's value
+// while lacking live-source evidence fails the run. Passing nil (or a
+// context with no entities) leaves the check a no-op — pre-memory behavior.
+func (c *FinalFactualChecker) SetMemoryContext(ctx *orchestrator.MemoryContext) {
+	c.memoryBypass.SetMemoryContext(ctx)
 }
 
 // Check performs the final factual verification on an EditorialArtifact.
@@ -170,6 +186,17 @@ func (c *FinalFactualChecker) Check(ctx context.Context, artifact *contracts.Edi
 
 	// Merge deterministic and LLM findings
 	result := c.mergeFindings(deterministicIssues, llmResult, artifact, verificationResult)
+
+	// Merge the deterministic memory-provenance (no-bypass) findings (v0.7,
+	// issue #145). A nil memory context (pre-memory run) contributes none.
+	// These are critical by design: a verified claim satisfied by memory
+	// alone is the invariant's forbidden outcome and fails the run.
+	if memoryFindings := c.memoryBypass.CheckMemoryProvenance(ctx, artifact, verificationResult); len(memoryFindings) > 0 {
+		result.FactualFindings = append(result.FactualFindings, memoryFindings...)
+		if result.OverallStatus == contracts.FactualCheckStatusPass {
+			result.OverallStatus = contracts.FactualCheckStatusFail
+		}
+	}
 
 	// Validate the result
 	if err := result.Validate(); err != nil {

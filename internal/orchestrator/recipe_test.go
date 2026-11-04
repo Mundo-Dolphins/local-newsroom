@@ -83,6 +83,12 @@ func (p *recordingPlanner) Generate(ctx context.Context, topic string, language 
 		Queries: []planner.SearchQuery{{Query: "planned", Purpose: "planned"}}}, nil
 }
 
+// GenerateMemory implements the discovery Planner interface (issue #145).
+// The recording planner behaves like Generate (pre-memory: no hints).
+func (p *recordingPlanner) GenerateMemory(ctx context.Context, topic string, language string, hint *planner.TimeRangeHint, _ string) (*planner.SearchPlan, error) {
+	return p.Generate(ctx, topic, language, hint)
+}
+
 // staticSearchProvider returns one fixed result for every query.
 type staticSearchProvider struct{}
 

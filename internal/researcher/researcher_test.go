@@ -236,7 +236,7 @@ func TestResearcherGenerate(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error from LLM, got nil")
 		}
-		if !llm.IsInternal(err) {
+		if !llm.IsInternal(err) && !errors.Is(err, context.DeadlineExceeded) {
 			t.Logf("Expected internal error, got: %v", err)
 		}
 	})
@@ -485,7 +485,7 @@ func TestResearcherGenerate_UnresolvedQuestions(t *testing.T) {
 func TestBuildUserPrompt(t *testing.T) {
 	t.Run("includes topic", func(t *testing.T) {
 		documents := []types.Document{{SourceID: "src1"}}
-		prompt := buildUserPrompt("Test Topic", documents, "")
+		prompt := buildUserPrompt("Test Topic", documents, "", "")
 
 		if !strings.Contains(prompt, "Test Topic") {
 			t.Error("Expected topic in prompt")
@@ -496,7 +496,7 @@ func TestBuildUserPrompt(t *testing.T) {
 		documents := []types.Document{
 			{SourceID: "unique-source-123", PlainText: "content"},
 		}
-		prompt := buildUserPrompt("Test", documents, "")
+		prompt := buildUserPrompt("Test", documents, "", "")
 
 		if !strings.Contains(prompt, "unique-source-123") {
 			t.Error("Expected source ID in prompt")
@@ -507,7 +507,7 @@ func TestBuildUserPrompt(t *testing.T) {
 		documents := []types.Document{
 			{SourceID: "src1", PlainText: "This is the document content"},
 		}
-		prompt := buildUserPrompt("Test", documents, "")
+		prompt := buildUserPrompt("Test", documents, "", "")
 
 		if !strings.Contains(prompt, "This is the document content") {
 			t.Error("Expected document content in prompt")
@@ -1073,8 +1073,8 @@ func NewFakeClient(jsonResponse string, err error) *FakeClient {
 func TestBuildUserPromptRecipeInstructions(t *testing.T) {
 	docs := []types.Document{{SourceID: "src1", PlainText: "content"}}
 
-	standard := buildUserPrompt("Topic", docs, "")
-	withInstructions := buildUserPrompt("Topic", docs, "Find the injury reports.")
+	standard := buildUserPrompt("Topic", docs, "", "")
+	withInstructions := buildUserPrompt("Topic", docs, "Find the injury reports.", "")
 
 	assert.NotContains(t, standard, "RECIPE")
 	assert.Contains(t, withInstructions, "=== RECIPE RESEARCH INSTRUCTIONS ===")

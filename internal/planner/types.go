@@ -37,6 +37,12 @@ type SearchPlan struct {
 
 	// TimeRangeHint is an optional time-range hint for search recency.
 	TimeRangeHint *TimeRangeHint `json:"time_range_hint,omitempty"`
+
+	// MemoryHints records the rendered editorial-memory hint block that was
+	// projected into the planner prompt for this plan (issue #145). It is
+	// provenance: the queries still target live sources, and this field is
+	// never consumed by any stage as evidence. Empty = no memory influence.
+	MemoryHints string `json:"memory_hints,omitempty"`
 }
 
 // SearchQuery represents a single search query in the plan.
@@ -86,6 +92,13 @@ type Config struct {
 	// PromptOverride allows customizing the system prompt for testing or special cases.
 	// If empty, uses prompts/search-planner.prompt.
 	PromptOverride string
+
+	// MemoryHints is the optional editorial-memory hint block rendered for
+	// this planning call (issue #145). It is context, never evidence: the
+	// block's own framing states that hints may guide query formulation but
+	// must never be reported as fact. Empty means the prompt is
+	// byte-identical to the pre-memory stage prompt.
+	MemoryHints string
 }
 
 // DefaultConfig returns a sensible default configuration.
