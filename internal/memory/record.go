@@ -302,6 +302,28 @@ func (m *MemoryRecord) IsUsable(t time.Time) bool {
 	return !m.Expiration.IsExpired(t)
 }
 
+// FreshnessStatusOf applies the policy to this record at time t and returns
+// its freshness status (fresh, stale, or expired).
+//
+// Stale-but-active records remain usable (see IsUsable): staleness means
+// the record must be re-verified before it is used as current factual
+// context, not that it is suppressed. Expired records are not usable.
+// A nil record is reported as expired.
+func (m *MemoryRecord) FreshnessStatusOf(policy FreshnessPolicy, t time.Time) FreshnessAssessment {
+	return policy.StatusOf(m, t)
+}
+
+// ReVerify reports whether the record must be re-verified before it is used
+// as current factual context, under the policy at time t.
+//
+// Stale and expired records both re-verify: stale records may still guide
+// research and prioritization, but must be confirmed against a source
+// again before their values are presented as current.
+// A nil record must be re-verified.
+func (m *MemoryRecord) ReVerify(policy FreshnessPolicy, t time.Time) bool {
+	return policy.StatusOf(m, t).ReVerify()
+}
+
 // TimeToUTC converts a time.Time to UTC if it is not already in UTC.
 func TimeToUTC(t time.Time) time.Time {
 	if t.Location() != time.UTC {

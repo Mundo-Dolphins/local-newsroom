@@ -99,6 +99,13 @@ type Freshness struct {
 // IsStale reports whether the record is past its staleness window at time t.
 // A record that was never verified is considered stale for consumers that
 // require verification.
+//
+// The comparison is inclusive: a record is stale when its verification is
+// *at or beyond* StaleAfter old. This keeps the staleness windows of
+// overlapping policies (a record's own window vs. a policy's band window)
+// monotonic under min-composition: a record that is stale under the
+// narrower window is still stale when the broader one is applied, so the
+// combined judgment equals the stricter of the two.
 func (f Freshness) IsStale(t time.Time) bool {
 	if f.LastVerifiedAt.IsZero() {
 		return true
@@ -106,7 +113,7 @@ func (f Freshness) IsStale(t time.Time) bool {
 	if f.StaleAfter <= 0 {
 		return false
 	}
-	return t.Sub(f.LastVerifiedAt) > f.StaleAfter
+	return !t.Before(f.LastVerifiedAt.Add(f.StaleAfter))
 }
 
 // Expiration models invalidation and expiry of a memory record.

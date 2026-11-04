@@ -52,6 +52,8 @@ func normKey(key string) string {
 
 // isStale reports whether the attribute is past its staleness window at t.
 // An attribute that was never verified is stale (mirrors memory.Freshness).
+// The window boundary is inclusive (fresh at exactly StaleAfter, stale
+// immediately after), mirroring memory.Freshness.IsStale.
 func (a Attribute) isStale(t time.Time) bool {
 	if a.LastVerifiedAt.IsZero() {
 		return true
@@ -59,7 +61,60 @@ func (a Attribute) isStale(t time.Time) bool {
 	if a.StaleAfter <= 0 {
 		return false
 	}
-	return t.Sub(a.LastVerifiedAt) > a.StaleAfter
+	return !t.Before(a.LastVerifiedAt.Add(a.StaleAfter))
+}
+
+// FreshnessStatus returns the attribute's freshness status (fresh, stale,
+// or expired) at time t under the policy:
+//
+//   - a never-verified attribute is always stale (verification currency is
+//     explicit, mirroring memory.Freshness);
+//   - the attribute's own StaleAfter window, when set, always wins over the
+//     policy's band window;
+//   - the policy's volatility-band expiry window, when set, bounds the
+//     attribute's lifetime from its last verification; past it, the
+//     attribute is expired (no longer usable, not merely stale).
+//
+// The calculation is deterministic: the same attribute, policy, and time
+// always produce the same status.
+func (a Attribute) FreshnessStatus(policy memory.FreshnessPolicy, t time.Time) memory.FreshnessAssessment {
+	assess := memory.FreshnessAssessment{
+		Status:     memory.StatusFresh,
+		StaleAfter: policy.StalenessWindow(a.Volatility),
+	}
+	if a.StaleAfter > 0 {
+		assess.StaleAfter = a.StaleAfter
+	}
+	if a.LastVerifiedAt.IsZero() {
+		assess.Status = memory.StatusStale
+		return assess
+	}
+	// Absolute expiry: the policy's band-bound lifetime from the last
+	// verification bounds the attribute's usability.
+	if w := policy.ExpiryWindow(a.Volatility); w > 0 && !t.Before(a.LastVerifiedAt.Add(w)) {
+		assess.ExpiresAt = a.LastVerifiedAt.Add(w)
+		assess.Status = memory.StatusExpired
+		return assess
+	}
+	// Staleness: the attribute's own window is the stricter of the two and
+	// always wins; the policy's band window applies to any age left over.
+	// The boundary is inclusive, mirroring memory.Freshness.IsStale.
+	stale := a.isStale(t)
+	if !stale && assess.StaleAfter > 0 {
+		stale = !t.Before(a.LastVerifiedAt.Add(assess.StaleAfter))
+	}
+	if stale {
+		assess.Status = memory.StatusStale
+		return assess
+	}
+	return assess
+}
+
+// IsStaleAt reports whether the attribute is stale or expired at time t
+// under the policy (i.e. it must be re-verified before its value is used as
+// current factual context).
+func (a Attribute) IsStaleAt(policy memory.FreshnessPolicy, t time.Time) bool {
+	return a.FreshnessStatus(policy, t).ReVerify()
 }
 
 // validate checks the attribute's invariants.

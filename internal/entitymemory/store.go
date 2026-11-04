@@ -33,6 +33,14 @@ type Store struct {
 	entities map[string]*Entity  // by canonical entity ID
 	byName   map[string][]string // folded canonical name / alias -> entity IDs
 	loadErr  error               // set if the open-time load failed (partial or empty state)
+
+	// policy is the freshness policy for attribute-level freshness
+	// judgments (FreshnessPolicy returns the backing store's policy when
+	// this is unset).
+	policy memory.FreshnessPolicy
+
+	// policyKnown is true once SetFreshnessPolicy has been called.
+	policyKnown bool
 }
 
 // NewStore opens the entity memory on top of the given v0.7 memory store.
@@ -69,10 +77,47 @@ func (s *Store) WithNow(t time.Time) *Store {
 	return s
 }
 
+// SetFreshnessPolicy overrides the freshness policy used for attribute-level
+// freshness judgments (FreshnessStatus, StaleAttributes).
+//
+// The policy is generic (volatility bands + durations; see
+// memory.FreshnessPolicy). When unset, the store defers to the backing
+// memory store's policy (FreshnessPolicy) and falls back to
+// memory.DefaultFreshnessPolicy, so out of the box an attribute's
+// volatility band drives its freshness window.
+func (s *Store) SetFreshnessPolicy(p memory.FreshnessPolicy) *Store {
+	s.mu.Lock()
+	s.policy = p
+	s.policyKnown = true
+	s.mu.Unlock()
+	return s
+}
+
+// FreshnessPolicy returns the freshness policy in effect for attribute
+// freshness judgments: the store's own override when one has been set, else
+// the backing store's policy, else the default policy.
+func (s *Store) FreshnessPolicy() memory.FreshnessPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.policyLocked()
+}
+
 // now returns the reference time for staleness decisions (zero disables
 // them). Caller must hold s.mu (read or write).
 func (s *Store) now() time.Time {
 	return s.nowAt
+}
+
+// policyLocked returns the freshness policy in effect (see
+// FreshnessPolicy). Caller must hold s.mu (read or write).
+func (s *Store) policyLocked() memory.FreshnessPolicy {
+	if s.policyKnown {
+		return s.policy
+	}
+	if p, ok := s.store.(interface{ FreshnessPolicy() memory.FreshnessPolicy }); ok {
+		return p.FreshnessPolicy()
+	}
+	return memory.DefaultFreshnessPolicy
 }
 
 // LoadError returns the error from the open-time load, if any (e.g. a
@@ -136,6 +181,10 @@ var ErrEntityExists = errors.New("entity already exists")
 // ErrEntityNotFound is returned by lookup and update operations on unknown
 // entity IDs.
 var ErrEntityNotFound = errors.New("entity not found")
+
+// ErrAttributeNotFound is returned when an attribute key is requested that
+// does not exist on the entity.
+var ErrAttributeNotFound = errors.New("attribute not found")
 
 // ErrConflict describes a field-level conflict: new data disagrees with
 // existing (unexpired) memory for the same attribute. The existing value is
