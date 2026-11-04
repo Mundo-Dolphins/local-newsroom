@@ -13,13 +13,15 @@ import (
 // consumers that do not need durable storage.
 //
 // It mirrors the SQLiteStore semantics: idempotent Write, strict Create,
-// deterministic order in Query, atomic lifecycle transitions, and a
-// sanitization gate.
+// deterministic order in Query, atomic lifecycle transitions, a freshness
+// policy for freshness-filtered queries, and a sanitization gate.
 type FakeStore struct {
-	mu        sync.RWMutex
-	records   map[memory.MemoryStableID]*memory.MemoryRecord
-	sanitizer Sanitizer
-	schemaVer int
+	mu             sync.RWMutex
+	records        map[memory.MemoryStableID]*memory.MemoryRecord
+	sanitizer      Sanitizer
+	schemaVer      int
+	freshness      memory.FreshnessPolicy
+	freshnessKnown bool
 }
 
 // NewFakeStore returns an empty FakeStore with the default (pattern-only)
@@ -42,10 +44,30 @@ func (s *FakeStore) WithSanitizer(sz Sanitizer) *FakeStore {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	clone.freshness = s.freshness
+	clone.freshnessKnown = s.freshnessKnown
 	for id, rec := range s.records {
 		clone.records[id] = cloneRecord(rec)
 	}
 	return clone
+}
+
+// FreshnessPolicy implements Store.
+func (s *FakeStore) FreshnessPolicy() memory.FreshnessPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.freshnessKnown {
+		return memory.DefaultFreshnessPolicy
+	}
+	return s.freshness
+}
+
+// SetFreshnessPolicy implements Store.
+func (s *FakeStore) SetFreshnessPolicy(p memory.FreshnessPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.freshness = p
+	s.freshnessKnown = true
 }
 
 // Ensure FakeStore implements Store
@@ -122,9 +144,14 @@ func (s *FakeStore) Query(_ context.Context, q Query) ([]*memory.MemoryRecord, e
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	policy := s.freshness
+	if !s.freshnessKnown {
+		policy = memory.DefaultFreshnessPolicy
+	}
+
 	var out []*memory.MemoryRecord
 	for _, rec := range s.records {
-		if !q.matches(rec) {
+		if !q.matches(rec, policy) {
 			continue
 		}
 		out = append(out, cloneRecord(rec))
@@ -196,8 +223,10 @@ func (s *FakeStore) SchemaVersion(_ context.Context) (int, error) {
 // Close implements Store (no-op for the fake).
 func (s *FakeStore) Close() error { return nil }
 
-// matches reports whether the record satisfies the query filter.
-func (q Query) matches(rec *memory.MemoryRecord) bool {
+// matches reports whether the record satisfies the query filter. The policy
+// is the freshness policy used for FreshStatus filtering (Query.matches is
+// a test/implementation helper; production code goes through Query).
+func (q Query) matches(rec *memory.MemoryRecord, policy memory.FreshnessPolicy) bool {
 	if q.Kind != "" && rec.Kind != q.Kind {
 		return false
 	}
@@ -225,6 +254,9 @@ func (q Query) matches(rec *memory.MemoryRecord) bool {
 		// include all
 	}
 	if !q.StaleAt.IsZero() && !rec.Freshness.IsStale(q.StaleAt) {
+		return false
+	}
+	if !q.FreshnessAt.IsZero() && policy.StatusOf(rec, q.FreshnessAt).Status != q.FreshStatus {
 		return false
 	}
 	return true

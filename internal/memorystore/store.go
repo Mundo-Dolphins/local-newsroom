@@ -50,8 +50,7 @@ import (
 //
 // Records that do not exist return (nil, nil)-style results through the
 // NotFound error helpers, mirroring internal/archive.
-type Store interface {
-	// Write inserts or replaces a record identified by its StableID.
+type Store interface { // Write inserts or replaces a record identified by its StableID.
 	//
 	// Write is idempotent for byte-identical records: rewriting the same
 	// record is a no-op apart from a refresh of UpdatedAt. Create is the
@@ -103,6 +102,18 @@ type Store interface {
 	// Count returns the number of stored records.
 	Count(ctx context.Context) (int, error)
 
+	// FreshnessPolicy returns the freshness policy the store applies to
+	// query-time freshness filters (Query.FreshStatus/FreshnessAt).
+	// The returned policy is immutable and may be shared.
+	FreshnessPolicy() memory.FreshnessPolicy
+
+	// SetFreshnessPolicy replaces the policy used by freshness-filtered
+	// queries. The policy is copied: later mutation of the argument does not
+	// affect the store. A zero-value policy behaves like the default
+	// (memory.DefaultFreshnessPolicy), since nil band maps fall back to the
+	// defaults.
+	SetFreshnessPolicy(p memory.FreshnessPolicy)
+
 	// SchemaVersion returns the current schema version of the backing store.
 	//
 	// Migration bookkeeping is internal to the implementation; callers use
@@ -127,6 +138,8 @@ type Store interface {
 //	Field        exact match on the record's sub-field
 //	Status       active (the default) or any; expired filters non-usable
 //	StaleAt      when set, keeps only records whose freshness is stale at t
+//	FreshnessAt  when set, evaluates the freshness policy against t and
+//	             keeps only records in the requested status (FreshStatus)
 //	Limit        maximum number of records to return (0 = no limit)
 type Query struct {
 	Kind        memory.MemoryKind
@@ -145,6 +158,12 @@ type Query struct {
 	// (per the record's Freshness window). Stale records are typically the
 	// input for a re-verification pass.
 	StaleAt time.Time
+
+	// FreshnessAt, when non-zero, evaluates the freshness policy against
+	// that time and keeps only records in the FreshStatus. Records the
+	// policy considers expired never satisfy FreshStatus.
+	FreshStatus memory.FreshnessStatus
+	FreshnessAt time.Time
 
 	// Limit bounds the result size (0 = unlimited). Results are ordered by
 	// stable ID ascending.

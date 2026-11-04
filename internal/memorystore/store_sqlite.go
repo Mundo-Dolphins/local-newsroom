@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mundo-Dolphins/local-newsroom/internal/memory"
@@ -73,10 +74,38 @@ type SQLiteStore struct {
 	db        *sql.DB
 	dbPath    string
 	sanitizer Sanitizer
+
+	mu             sync.RWMutex
+	freshness      memory.FreshnessPolicy
+	freshnessKnown bool
 }
 
 // Ensure SQLiteStore implements Store
 var _ Store = (*SQLiteStore)(nil)
+
+// FreshnessPolicy returns the freshness policy the store applies to
+// freshness-filtered queries (Query.FreshStatus/FreshnessAt).
+// The returned policy is immutable and may be shared.
+func (s *SQLiteStore) FreshnessPolicy() memory.FreshnessPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.freshnessKnown {
+		return memory.DefaultFreshnessPolicy
+	}
+	return s.freshness
+}
+
+// SetFreshnessPolicy replaces the policy used by freshness-filtered
+// queries. The policy is copied: later mutation of the argument does not
+// affect the store. A zero-value policy behaves like the default
+// (memory.DefaultFreshnessPolicy), since nil band maps fall back to the
+// defaults.
+func (s *SQLiteStore) SetFreshnessPolicy(p memory.FreshnessPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.freshness = p
+	s.freshnessKnown = true
+}
 
 // StoreOption configures a SQLiteStore.
 type StoreOption func(*storeConfig)
@@ -757,15 +786,23 @@ func (s *SQLiteStore) Query(ctx context.Context, q Query) ([]*memory.MemoryRecor
 	}
 
 	if !q.StaleAt.IsZero() {
-		// Staleness is per-record (each record has its own window), so the
-		// SQL pre-filter only drops records whose window provably excludes
-		// the query time; the exact per-record check happens in Go.
+		// Staleness is per-record (each record can have its own window, and
+		// the freshness policy adds band windows), so the SQL pre-filter only
+		// drops records whose window provably excludes the query time; the
+		// exact per-record check happens in Go.
 		// Records from the far future are never stale.
 		t := q.StaleAt
 		if t.Year() < 3000 {
 			conds = append(conds, "last_verified_at <= ?")
 			args = append(args, t.Format(timeFormat))
 		}
+	}
+
+	if !q.FreshnessAt.IsZero() {
+		// Freshness status is policy-derived (volatility band + timestamps),
+		// so it is evaluated per record in Go below; the SQL layer adds no
+		// pre-filter that would be policy-dependent.
+		_ = q.FreshnessAt
 	}
 
 	query := "SELECT " + memoryColumns + " FROM memories"
@@ -785,6 +822,8 @@ func (s *SQLiteStore) Query(ctx context.Context, q Query) ([]*memory.MemoryRecor
 	}
 	defer func() { _ = rows.Close() }()
 
+	policy := s.FreshnessPolicy()
+
 	var out []*memory.MemoryRecord
 	for rows.Next() {
 		r, err := scanMemory(rows)
@@ -795,6 +834,9 @@ func (s *SQLiteStore) Query(ctx context.Context, q Query) ([]*memory.MemoryRecor
 		// The stale window is per-record, so the coarse SQL filter above
 		// is refined here with the record's own Freshness.
 		if !q.StaleAt.IsZero() && !rec.Freshness.IsStale(q.StaleAt) {
+			continue
+		}
+		if !q.FreshnessAt.IsZero() && policy.StatusOf(rec, q.FreshnessAt).Status != q.FreshStatus {
 			continue
 		}
 		// Active queries return only usable records (lifecycle + expiry).
