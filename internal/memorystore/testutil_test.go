@@ -67,6 +67,27 @@ func buildRecord(t *testing.T, kind memory.MemoryKind, id memory.MemoryStableID)
 		if err != nil {
 			t.Fatalf("encode correction: %v", err)
 		}
+	case memory.KindEditorialPattern:
+		err := rec.EncodeValue(memory.PatternRecord{
+			Category:       "factual_correction",
+			GroupKey:       "editor-1",
+			MinOccurrences: 2,
+			Occurrences: []memory.PatternOccurrence{{
+				RecordID:    "mem-fb-1",
+				Feedback:    "factual correction",
+				Author:      "editor-1",
+				GivenAt:     testNow,
+				SubjectKind: "recipe",
+				SubjectName: "test-recipe",
+				Category:    "factual_correction",
+				Field:       "hunk-0",
+			}},
+			SampleFeedback: "factual correction",
+			Notes:          "Test pattern",
+		}, testNow)
+		if err != nil {
+			t.Fatalf("encode pattern: %v", err)
+		}
 	case memory.KindSuggestion:
 		rec.Scope = memory.ScopeRecipe
 		err := rec.EncodeValue(memory.SuggestionRecord{

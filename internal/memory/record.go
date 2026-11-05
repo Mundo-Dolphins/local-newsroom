@@ -127,6 +127,12 @@ func (m *MemoryRecord) DecodeValue() (any, error) {
 			return nil, fmt.Errorf("%w: correction: %v", ErrKindValueMismatch, err)
 		}
 		return v, nil
+	case KindEditorialPattern:
+		var v PatternRecord
+		if err := json.Unmarshal(m.Value, &v); err != nil {
+			return nil, fmt.Errorf("%w: editorial_pattern: %v", ErrKindValueMismatch, err)
+		}
+		return v, nil
 	case KindSuggestion:
 		var v SuggestionRecord
 		if err := json.Unmarshal(m.Value, &v); err != nil {
@@ -167,6 +173,8 @@ func (m *MemoryRecord) EncodeValue(v any, now time.Time) error {
 		ok = m.Kind == KindEditorialFeedback
 	case CorrectionRecord:
 		ok = m.Kind == KindCorrection
+	case PatternRecord:
+		ok = m.Kind == KindEditorialPattern
 	case SuggestionRecord:
 		ok = m.Kind == KindSuggestion
 	case RecipeExecutionRecord:
