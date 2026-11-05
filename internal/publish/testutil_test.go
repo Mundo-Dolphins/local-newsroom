@@ -211,10 +211,17 @@ func (h *harness) persistCrashedPlan(t *testing.T, plan *publication.Plan) {
 
 // newStore builds a workspace store in a temp directory.
 func newStore(t *testing.T) *workspace.Store {
+	return newStoreWithSanitizer(t)
+}
+
+// newStoreWithSanitizer is newStore with the exact secret values configured
+// (pattern-only otherwise); the final-artifact tests need the exact-value
+// layer to fail closed on configured secrets.
+func newStoreWithSanitizer(t *testing.T) *workspace.Store {
 	t.Helper()
-	store, err := workspace.NewStore(t.TempDir())
+	store, err := workspace.NewStoreWithSanitizer(t.TempDir(), run.NewSanitizer(testSecret))
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("NewStoreWithSanitizer: %v", err)
 	}
 	return store
 }

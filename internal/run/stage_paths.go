@@ -85,6 +85,32 @@ const (
 	PublicationContentDir = "publication/content"
 )
 
+// Final artifact layout inside the run directory (v0.7, issue #146).
+//
+// Final artifacts are a post-run state, not a pipeline stage (like
+// publication/): the rendered outputs under output/ are the original, and
+// the final/ directory holds the generated-vs-human-edited pair in its own
+// space so a recorded run can never overwrite the originals:
+//
+//	<run dir>/
+//	  final/
+//	    generated/<name>   ← pristine copy of the generated output
+//	    <name>             ← the human-edited final version
+//
+// Both files are baselined by content digest on the manifest's final_state
+// summary (internal/run, schema 0.7.0). The human edit happens in the
+// workspace (or anywhere) — the user's own file is the source of the final
+// half; the generated half is copied into the run directory verbatim.
+const (
+	// FinalArtifactsDir is the final-artifact state directory of a run.
+	FinalArtifactsDir = "final"
+
+	// FinalGeneratedDir holds the pristine copy of the generated artifact
+	// (final/generated/<name>), preserved so the human edit can be diffed
+	// against what the run produced.
+	FinalGeneratedDir = "final/generated"
+)
+
 // ReviewFileName is the file name of the human review bundle inside the run
 // directory. The bundle is a run-directory file (like the manifest), not a
 // stage artifact: it is written after the run reaches a terminal state and is

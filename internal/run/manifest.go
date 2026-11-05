@@ -428,6 +428,135 @@ func (p *PublicationState) Validate() error {
 }
 
 // ---------------------------------------------------------------------------
+// FinalState
+// ---------------------------------------------------------------------------
+
+// FinalState is the manifest's summary of the run's generated-vs-human-
+// edited final artifact pair (v0.7, issue #146).
+//
+// After a run completes, a human may edit the generated output (the rendered
+// article or thread) before publication. FinalState is the explicit, durable
+// record of both halves of that editorial loop. The two *content files*
+// (final/generated/*.md|txt) are separate documents in the run directory,
+// baselined by content digest: this summary never embeds their bytes. The
+// manifest records where both files live, what their persisted bytes digest
+// to, who edited them, and the optional outcome of their publication.
+//
+// The field is nil for every run that has not recorded a final state. The
+// generated artifact is always re-read back from disk and hashed at record
+// time, so the pair is baselined to exactly the bytes the store persists —
+// including any secret redaction the sanitization boundary performed (the
+// workspace store is the only boundary guaranteed to exist in every store
+// implementation).
+//
+// Edits are never inferred automatically from publication state: FinalState
+// is written only through Manifest.RecordFinalState, which requires an
+// explicit timestamp and an explicit editor.
+type FinalState struct {
+	// GeneratedPath is the run-relative path of the original generated
+	// artifact document (final/generated/<name>).
+	GeneratedPath string `json:"generated_path"`
+
+	// GeneratedHash is the digest of the persisted generated artifact bytes
+	// in the canonical "sha256:<64 hex>" form.
+	GeneratedHash string `json:"generated_hash"`
+
+	// FinalPath is the run-relative path of the human-edited final artifact
+	// document (final/<name>).
+	FinalPath string `json:"final_path"`
+
+	// FinalHash is the digest of the persisted final artifact bytes in the
+	// canonical "sha256:<64 hex>" form.
+	FinalHash string `json:"final_hash"`
+
+	// Editor identifies the human who produced the final version (an author
+	// or contributor identifier). It is redacted and must not look like a
+	// secret.
+	Editor string `json:"editor"`
+
+	// EditedAt is when the final version was recorded (UTC).
+	EditedAt Timestamp `json:"edited_at"`
+
+	// PublishedURI is the optional external reference of the publication
+	// result, when one is known (e.g. the published page or post URL).
+	PublishedURI string `json:"published_uri,omitempty"`
+}
+
+// maxFinalStateFieldLen bounds the editor and publication reference field
+// length.
+const maxFinalStateFieldLen = 2048
+
+// maxFinalStateURILen bounds the publication URI field length.
+const maxFinalStateURILen = 2048
+
+// Validate checks the final state summary.
+func (f *FinalState) Validate() error {
+	for _, field := range []struct {
+		name string
+		path string
+		hash string
+	}{
+		{"generated", f.GeneratedPath, f.GeneratedHash},
+		{"final", f.FinalPath, f.FinalHash},
+	} {
+		if field.path == "" || containsTraversal(field.path) {
+			return fmt.Errorf("final_state.%s_path %q must be a run-relative path without '..' segments", field.name, field.path)
+		}
+		if !strings.HasPrefix(field.path, FinalArtifactsDir+"/") {
+			return fmt.Errorf("final_state.%s_path %q must live in %s/", field.name, field.path, FinalArtifactsDir)
+		}
+		if !ValidSHA256Digest(field.hash) {
+			return fmt.Errorf("final_state.%s_hash %q must be a 'sha256:<64 hex>' digest", field.name, field.hash)
+		}
+	}
+	if f.FinalPath == f.GeneratedPath {
+		return fmt.Errorf("final_state: final and generated must reference different documents")
+	}
+	if f.Editor == "" || f.Editor == RedactedPlaceholder {
+		return fmt.Errorf("final_state.editor is required")
+	}
+	if strings.TrimSpace(f.Editor) == "" {
+		return fmt.Errorf("final_state.editor is blank")
+	}
+	if len(f.Editor) > maxFinalStateFieldLen {
+		return fmt.Errorf("final_state.editor exceeds %d characters", maxFinalStateFieldLen)
+	}
+	if f.Editor != "" && f.Editor != RedactedPlaceholder && LooksLikeSecret(f.Editor) {
+		return fmt.Errorf("final_state.editor contains secret-looking material; redact it before recording")
+	}
+	if f.EditedAt.IsZero() {
+		return fmt.Errorf("final_state.edited_at is required")
+	}
+	if len(f.PublishedURI) > maxFinalStateURILen {
+		return fmt.Errorf("final_state.published_uri exceeds %d characters", maxFinalStateURILen)
+	}
+	if f.PublishedURI != "" {
+		// Re-parse with the redaction placeholder swapped for a parse-safe
+		// marker, exactly like ModelMetadata.Validate: redacted reference
+		// URIs must still validate as http(s) URLs.
+		redacted := strings.Contains(f.PublishedURI, RedactedPlaceholder)
+		toParse := f.PublishedURI
+		if redacted {
+			toParse = strings.ReplaceAll(f.PublishedURI, RedactedPlaceholder, "redacted")
+		}
+		u, err := url.Parse(toParse)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("final_state.published_uri %q is not a valid http(s) URL", f.PublishedURI)
+		}
+		if u.User != nil {
+			password, hasPassword := u.User.Password()
+			if hasPassword && (!redacted || password != "redacted") {
+				return fmt.Errorf("final_state.published_uri must not contain credentials")
+			}
+		}
+		if LooksLikeSecret(f.PublishedURI) {
+			return fmt.Errorf("final_state.published_uri contains secret-looking material; redact it before recording")
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // ModelMetadata
 // ---------------------------------------------------------------------------
 
@@ -938,6 +1067,13 @@ type Manifest struct {
 	// plan (v0.6). Nil when the run has no publication state yet.
 	PublicationState *PublicationState `json:"publication_state,omitempty"`
 
+	// FinalState summarizes the run's generated vs human-edited final
+	// artifact pair (v0.7, issue #146): the two content documents in
+	// final/, baselined by content digest, plus the editor identity and the
+	// optional publication result. Nil when the run has not recorded a
+	// final state.
+	FinalState *FinalState `json:"final_state,omitempty"`
+
 	// Model records the LLM model and endpoint used by the run.
 	// Credentials are never recorded (see ModelMetadata).
 	Model ModelMetadata `json:"model"`
@@ -1203,6 +1339,22 @@ func (m *Manifest) Validate() error {
 	if m.PublicationState != nil {
 		if err := m.PublicationState.Validate(); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if m.FinalState != nil {
+		if err := m.FinalState.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+		if !m.Status.Terminal() {
+			addf("final_state is recorded but the run is %s; only terminal runs can record a final artifact pair", m.Status)
+		}
+		if m.Status == RunStatusSucceeded {
+			for _, s := range m.Stages {
+				if s.Name == StageRender && s.Status != StageStatusSucceeded {
+					addf("final_state is recorded but the render stage is %s; the generated artifact cannot be baselined", s.Status)
+					break
+				}
+			}
 		}
 	}
 	if err := m.Model.Validate(); err != nil {
@@ -1529,6 +1681,60 @@ func (m *Manifest) Reopen(at time.Time) error {
 	m.FinishedAt = nil
 	m.Result = Result{}
 	return m.AddWarning("reopened", "run reopened for resume or explicit stage retry", at)
+}
+
+// RecordFinalState records the generated vs human-edited final artifact pair
+// (v0.7, issue #146).
+//
+// Valid only for a terminal run: the pair is a post-run record, not a
+// pipeline stage, and the generated half can only be baselined to output
+// that is final. This is the only mutation path that may touch a terminal
+// manifest (alongside Reopen, the deliberate act behind resume and retry).
+//
+// The state replaces any previously recorded final state (re-editing
+// replaces the record; re-recording the identical pair is a no-op),
+// advances updated_at, and records a run-level note. It never touches the
+// generated artifact, the run's stage records, or the result, so the
+// historical record of what the run produced stays intact.
+func (m *Manifest) RecordFinalState(fs *FinalState, at time.Time) error {
+	if fs == nil {
+		return errors.New("final state is nil")
+	}
+	if err := fs.Validate(); err != nil {
+		return fmt.Errorf("invalid final state: %w", err)
+	}
+	if !m.Status.Terminal() {
+		return fmt.Errorf("run %s is %s; only terminal runs can record a final artifact pair", m.ID, m.Status)
+	}
+	if err := m.touch(at); err != nil {
+		return err
+	}
+	m.FinalState = fs
+	// The run is terminal, so AddWarning (active runs only) cannot record
+	// the note; it is appended directly, in the same bounded shape.
+	w := NewWarning("final_recorded", "generated vs human-edited final artifact pair recorded", at)
+	if err := w.Validate(); err != nil {
+		return fmt.Errorf("invalid final-state warning: %w", err)
+	}
+	m.Warnings = append(m.Warnings, w)
+	trimWarningLog(&m.Warnings)
+	return nil
+}
+
+// RedactFinalStateField replaces the final-state field that still equals
+// value with the redaction placeholder after the workspace redaction
+// boundary rewrote it (the store is the sole point of truth for what may be
+// written). The method re-validates the state: an editor that only consists
+// of redaction placeholders is no longer a valid identifier and is rejected,
+// which makes a double-redacted final state impossible to construct.
+func (f *FinalState) RedactField(value string) error {
+	if f.Editor == value {
+		f.Editor = RedactedPlaceholder
+	}
+	if f.PublishedURI == value {
+		f.PublishedURI = RedactedPlaceholder
+	}
+	return f.Validate()
 }
 
 // StartStage starts (or restarts after failure or cancellation) a stage,

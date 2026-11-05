@@ -327,6 +327,15 @@ func (s *Store) CreateRun(m *run.Manifest) (string, error) {
 		return "", fmt.Errorf("setting permissions on %s: %w", dir, err)
 	}
 
+	// Redact final-state free text at the boundary, then validate the
+	// (possibly redacted) manifest in full before any byte reaches disk.
+	if err := s.redactFinalStateFreeText(m); err != nil {
+		return "", err
+	}
+	if err := s.assertManifestStorable(m); err != nil {
+		return "", err
+	}
+
 	// Record where the workspace lives (traceability; the field is optional).
 	if m.Workspace.Path == "" {
 		m.Workspace.Path = s.root
@@ -371,6 +380,9 @@ func (s *Store) inspectExistingManifest(m *run.Manifest, data []byte) error {
 //
 // It returns the absolute path of the manifest file.
 func (s *Store) SaveManifest(m *run.Manifest) (string, error) {
+	if err := s.redactFinalStateFreeText(m); err != nil {
+		return "", err
+	}
 	if err := s.assertManifestStorable(m); err != nil {
 		return "", err
 	}
@@ -717,6 +729,32 @@ func canonicalRelPath(rel string) (string, error) {
 // manifestPath joins a run directory and the manifest file name.
 func manifestPath(dir string) string {
 	return filepath.Join(dir, ManifestFileName)
+}
+
+// redactFinalStateFreeText sanitizes the free-text fields of a recorded
+// final state (paths, editor, publication reference) through the store's
+// redaction boundary before the manifest is validated and written.
+//
+// The final state is the manifest's only free-text field that records human
+// input (the author's identity and publication reference), so it is the only
+// manifest field that can carry a secret that was not detected at its origin
+// (the workspace root, an author identifier, a URL). The store is the sole
+// point of truth for what may be written; after redaction the state must
+// still validate, which a placeholder-only editor refuses.
+func (s *Store) redactFinalStateFreeText(m *run.Manifest) error {
+	if m == nil || m.FinalState == nil {
+		return nil
+	}
+	for _, value := range []string{m.FinalState.GeneratedPath, m.FinalState.FinalPath, m.FinalState.Editor, m.FinalState.PublishedURI} {
+		clean, count := s.Sanitizer().Sanitize(value)
+		if count == 0 {
+			continue
+		}
+		if err := m.FinalState.RedactField(clean); err != nil {
+			return fmt.Errorf("%w: final state of %s is not redactable: %v", ErrManifestInvalid, m.ID, err)
+		}
+	}
+	return nil
 }
 
 // assertManifestStorable validates the manifest in full (structure and
