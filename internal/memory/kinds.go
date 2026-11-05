@@ -41,6 +41,12 @@ const (
 	// KindSuggestion captures machine- or human-generated proposals to refine
 	// profiles or recipes. Suggestions are never applied automatically.
 	KindSuggestion MemoryKind = "suggestion"
+
+	// KindEditorialPattern records detected repeated editorial feedback
+	// patterns. Patterns are advisory: they summarize recurring issues
+	// but don't bypass the verification pipeline or modify profiles
+	// automatically.
+	KindEditorialPattern MemoryKind = "editorial_pattern"
 )
 
 // AllKinds lists every recognized MemoryKind in canonical order.
@@ -51,6 +57,7 @@ var AllKinds = []MemoryKind{
 	KindRecipeExecution,
 	KindCorrection,
 	KindSuggestion,
+	KindEditorialPattern,
 }
 
 // ParseMemoryKind converts a string into a MemoryKind.

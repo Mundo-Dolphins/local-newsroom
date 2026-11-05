@@ -281,3 +281,75 @@ func (v RecipeExecutionRecord) Validate() error {
 	}
 	return nil
 }
+
+// PatternOccurrence represents one occurrence of a detected pattern.
+type PatternOccurrence struct {
+	// RecordID is the stable ID of the editorial feedback record.
+	RecordID string `json:"record_id"`
+
+	// Feedback is the full feedback text from the record.
+	Feedback string `json:"feedback"`
+
+	// Author is the editor who gave the feedback (GivenBy field).
+	Author string `json:"author"`
+
+	// GivenAt is when the feedback was given (UTC).
+	GivenAt time.Time `json:"given_at"`
+
+	// SubjectKind is the kind of subject (recipe, profile, entity, etc.).
+	SubjectKind string `json:"subject_kind"`
+
+	// SubjectName is the name of the subject.
+	SubjectName string `json:"subject_name"`
+
+	// Category is the editorial change category.
+	Category string `json:"category"`
+
+	// Field is the record's field (e.g., "hunk-0", "summary").
+	Field string `json:"field"`
+}
+
+// PatternRecord is the Value payload for KindEditorialPattern records.
+//
+// A pattern record represents a detected repeated editorial feedback pattern.
+// Patterns are advisory: they summarize recurring issues but don't bypass
+// the verification pipeline or modify profiles automatically.
+type PatternRecord struct {
+	// Category is the editorial change category for this pattern.
+	Category string `json:"category"`
+
+	// GroupKey identifies the grouping (author/profile/recipe).
+	GroupKey string `json:"group_key"`
+
+	// MinOccurrences is the minimum occurrences threshold used for detection.
+	MinOccurrences int `json:"min_occurrences"`
+
+	// Occurrences is the list of individual occurrences that form this pattern.
+	Occurrences []PatternOccurrence `json:"occurrences"`
+
+	// SampleFeedback is a sample feedback text from the pattern.
+	SampleFeedback string `json:"sample_feedback"`
+
+	// Notes is an optional human-readable description of the pattern.
+	Notes string `json:"notes,omitempty"`
+}
+
+// Validate checks the payload's invariants.
+func (v PatternRecord) Validate() error {
+	if v.Category == "" {
+		return fmt.Errorf("pattern record: category is required")
+	}
+	if v.GroupKey == "" {
+		return fmt.Errorf("pattern record: group_key is required")
+	}
+	if v.MinOccurrences <= 0 {
+		return fmt.Errorf("pattern record: min_occurrences must be positive")
+	}
+	if len(v.Occurrences) == 0 {
+		return fmt.Errorf("pattern record: at least one occurrence is required")
+	}
+	if v.SampleFeedback == "" {
+		return fmt.Errorf("pattern record: sample_feedback is required")
+	}
+	return nil
+}

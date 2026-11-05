@@ -42,3 +42,6 @@
 //     itself (the Result) is already in hand and is unaffected.
 
 package feedback
+
+// Pattern detection (issue #148) is implemented in the patterns package.
+// DetectPatterns returns KindEditorialPattern records for persisted patterns.
