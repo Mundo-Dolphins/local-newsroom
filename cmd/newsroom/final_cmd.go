@@ -140,7 +140,9 @@ func doFinal(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		if errors.Is(err, workspace.ErrRunNotFound) {
 			if fl3.format == "json" {
-				fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(finalReport{RunID: string(id), Status: "unknown"}))
+				if _, werr := fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(finalReport{RunID: string(id), Status: "unknown"})); werr != nil {
+					return fmt.Errorf("writing JSON output: %w", werr)
+				}
 			}
 			return exitf(8, "run %s not found in workspace %s", id, root)
 		}
@@ -161,7 +163,9 @@ func doFinal(cmd *cobra.Command, args []string) error {
 	res, err := eng.RecordFinal(cmd.Context(), id, req, bundle)
 	if err != nil {
 		if fl3.format == "json" {
-			fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(finalReportOf(m, nil, req)))
+			if _, werr := fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(finalReportOf(m, nil, req))); werr != nil {
+				return fmt.Errorf("writing JSON output: %w", werr)
+			}
 		}
 		code := 8
 		if errors.Is(err, publish.ErrFinalNotCompleted) {
@@ -172,17 +176,32 @@ func doFinal(cmd *cobra.Command, args []string) error {
 
 	rep := finalReportOf(m, res, req)
 	if fl3.format == "json" {
-		fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(rep))
+		if _, werr := fmt.Fprintln(cmd.OutOrStdout(), marshalJSON(rep)); werr != nil {
+			return fmt.Errorf("writing JSON output: %w", werr)
+		}
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Recorded the generated vs human-edited final artifact pair for run %s.\n", id)
-	fmt.Fprintf(cmd.OutOrStdout(), "  generated: %s (%s)\n", res.GeneratedPath, res.GeneratedHash)
-	fmt.Fprintf(cmd.OutOrStdout(), "  final:     %s (%s)\n", res.FinalPath, res.FinalHash)
-	fmt.Fprintf(cmd.OutOrStdout(), "  editor:    %s\n", fl3.editor)
-	if fl3.publishedURI != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "  published: %s\n", fl3.publishedURI)
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "Recorded the generated vs human-edited final artifact pair for run %s.\n", id); err != nil {
+		return fmt.Errorf("writing output: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Both versions are preserved; the original output is unchanged.\n")
+	if _, err := fmt.Fprintf(out, "  generated: %s (%s)\n", res.GeneratedPath, res.GeneratedHash); err != nil {
+		return fmt.Errorf("writing output: %w", err)
+	}
+	if _, err := fmt.Fprintf(out, "  final:     %s (%s)\n", res.FinalPath, res.FinalHash); err != nil {
+		return fmt.Errorf("writing output: %w", err)
+	}
+	if _, err := fmt.Fprintf(out, "  editor:    %s\n", fl3.editor); err != nil {
+		return fmt.Errorf("writing output: %w", err)
+	}
+	if fl3.publishedURI != "" {
+		if _, err := fmt.Fprintf(out, "  published: %s\n", fl3.publishedURI); err != nil {
+			return fmt.Errorf("writing output: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(out, "Both versions are preserved; the original output is unchanged.\n"); err != nil {
+		return fmt.Errorf("writing output: %w", err)
+	}
 	return nil
 }
 

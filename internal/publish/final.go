@@ -169,6 +169,8 @@ func (e *Engine) recordFinalDocument(m *run.Manifest, rel string, ref run.Artifa
 
 // verifyFinalDocuments fails closed on any persisted final document that
 // cannot be read back (the directory was raced away or is unreadable).
+// Final calls it before re-hashing each recorded document so an unreadable
+// state is reported as ErrFinalUnreadable rather than a bare I/O error.
 func (e *Engine) verifyFinalDocuments(m *run.Manifest, rels ...string) error {
 	for _, rel := range rels {
 		if _, err := e.store.LoadArtifact(m.ID, rel); err != nil {
@@ -363,6 +365,9 @@ func (e *Engine) Final(ctx context.Context, runID run.RunID) (*FinalReport, erro
 		{"generated", m.FinalState.GeneratedPath, &rep.GeneratedHashNow},
 		{"final", m.FinalState.FinalPath, &rep.FinalHashNow},
 	} {
+		if err := e.verifyFinalDocuments(m, pair.rel); err != nil {
+			return nil, err
+		}
 		data, err := e.store.LoadArtifact(m.ID, pair.rel)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s: %v", ErrFinalUnreadable, pair.rel, err)
